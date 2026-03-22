@@ -308,7 +308,7 @@ export default function App() {
   }, [view, goHome])
 
   return (
-    <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column', width: '100%' }}>
       <AnimatePresence mode="wait">
         {view === 'landing' ? (
           <motion.div key="landing" variants={fadeVariants} initial="initial" animate="animate" exit="exit" transition={fadeTransition} style={{ flex: 1 }}>
