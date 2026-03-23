@@ -1,1430 +1,1082 @@
-import { useState, useEffect, useCallback, useRef, type CSSProperties, type ReactNode } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════════════════
+   TYPES
+   ═══════════════════════════════════════════════════════════════════════════ */
 
-interface SavedText {
-  id: string
-  title: string
-  text: string
-  language: string
-  day: number       // 0 = not started, 1-3 = current day
-  step: number      // current step within day
-  lineMastery: Record<number, 'perfect' | 'close' | 'missed' | null>
-  completedDays: number[]
-  createdAt: number
+interface Line { speaker: string; text: string }
+interface Chunk { id: number; label: string; lines: Line[] }
+interface MacroSection { id: string; label: string; chunks: number[] }
+interface Skit {
+  id: string; title: string; subtitle: string; speakers: string[]
+  chunks: Chunk[]; macroSections: MacroSection[]; createdAt: string
 }
+interface SkitProgress { chunkMastery: Record<number, number> }
+type Tool = 'read' | 'fill' | 'firstletter' | 'rsvp'
+type View = 'library' | 'import' | 'practice'
 
-type AppView = 'landing' | 'training'
+/* ═══════════════════════════════════════════════════════════════════════════
+   SEED SKITS
+   ═══════════════════════════════════════════════════════════════════════════ */
 
-const LANGUAGES = [
-  { code: 'en-US', label: 'English' },
-  { code: 'es-ES', label: 'Spanish' },
-  { code: 'fr-FR', label: 'French' },
-  { code: 'de-DE', label: 'German' },
-  { code: 'ar-SA', label: 'Arabic' },
-  { code: 'ja-JP', label: 'Japanese' },
-  { code: 'ko-KR', label: 'Korean' },
-  { code: 'it-IT', label: 'Italian' },
-  { code: 'pt-BR', label: 'Portuguese' },
+const SEED_SKITS: Skit[] = [
+  {
+    id: 'smoking', title: 'Smoking on a Plane',
+    subtitle: "A monologue about freedom, ashtrays, and Sammie",
+    speakers: ['GUY', 'FA'],
+    chunks: [
+      { id: 1, label: 'The Opener', lines: [
+        { speaker: 'FA', text: "Oh, sir. There's no smoking on airplanes." },
+        { speaker: 'GUY', text: "I know. Isn't that wild? Don't worry about it. I'll be quick." },
+      ]},
+      { id: 2, label: 'The FAA Threat', lines: [
+        { speaker: 'FA', text: "Sir, if you don't put that out, I'm going to have to report you to the FAA." },
+        { speaker: 'GUY', text: "Sammie — it's Sammie, right? Do you know when the first commercial flight went smokeless, Sammie?" },
+        { speaker: 'FA', text: 'No.' },
+      ]},
+      { id: 3, label: '1973, Moon & Tombstone', lines: [
+        { speaker: 'GUY', text: "1973. You know what else happened in 1973? We went to the moon. Now look at us. We can't smoke, and we stopped going to the moon. Coincidence? I think not. Look at this. See that little metal rectangle? It's a sealed-over ashtray, a remnant of a better time. But they welded it shut. That's not an armrest, Sammie. That's a tombstone. For freedom." },
+      ]},
+      { id: 4, label: 'Liquids, Shoes, Rick', lines: [
+        { speaker: 'GUY', text: "It starts with ashtrays. Then it's liquids over 3.4 ounces. And just when we've been brainwashed into believing a bottle of water will lead to the next 911, they're making you take off your shoes like you're entering a Japanese temple, except there's no peace, there's no garden. There's just an overweight guy named Rick waving a metal detector wand over your belt buckle." },
+      ]},
+      { id: 5, label: 'Deodorant Sandwich', lines: [
+        { speaker: 'GUY', text: "And now you can't do one damn thing without someone reporting you to the Department of Homeland Security. I mean, I had to put my deodorant in a Ziploc bag. A Ziploc bag, Sammie. Like a sandwich. They're treating my personal hygiene like a sandwich. And for what? So that some algorithm can flag me because I bought a one-way ticket? I buy everything one-way. That's how I live my life. Forward. Always forward." },
+      ]},
+      { id: 6, label: 'Proud Tradition', lines: [
+        { speaker: 'FA', text: "Sir, I really need you to—" },
+        { speaker: 'GUY', text: "I remember back in the day when you got on a plane and you knew you were in for a good time. A little smoking, a little drinking, and the stewardesses. You come from a proud tradition, Sammie. Flight attendants used to hand you a warm towel, a cocktail, and a cigarette. Now you hand people a bag of peanuts and an apology. And I can't even open the damn bag of peanuts cause Mr. Brown is deathly allergic to them. But I want you to know that it's not your fault, Sammie. That's the system... But we don't have to take it." },
+      ]},
+      { id: 7, label: 'The Heroes', lines: [
+        { speaker: 'GUY', text: "Like Henry David Thoreau and Rosa Parks and David Lee Roth when he left Van Halen, we can say enough. Enough of this farce. Enough playing by their rules." },
+      ]},
+      { id: 8, label: '30,000 Feet', lines: [
+        { speaker: 'GUY', text: "And when you and I are old, Sammie — and we will get old — we can look back on this moment. Thirty thousand feet above God's green earth. And we can say: we smoked one. We smoked one, for America!" },
+      ]},
+      { id: 9, label: 'The Drag & Punchline', lines: [
+        { speaker: 'GUY', text: '(takes a long drag) (beat)' },
+        { speaker: 'FA', text: '...Can I get a drag of that?' },
+      ]},
+    ],
+    macroSections: [
+      { id: 'all', label: 'Full Skit', chunks: [1,2,3,4,5,6,7,8,9] },
+      { id: 'm1', label: 'Act I: Setup', chunks: [1,2,3] },
+      { id: 'm2', label: 'Act II: Rant', chunks: [4,5] },
+      { id: 'm3', label: 'Act III: Rally', chunks: [6,7,8] },
+      { id: 'm4', label: 'Finale', chunks: [9] },
+    ],
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: 'bubble', title: 'Here Comes Another Bubble',
+    subtitle: "A Billy Joel parody — Silicon Valley's greatest hits",
+    speakers: ['PERFORMER'],
+    chunks: [
+      { id: 1, label: 'Verse 1', lines: [
+        { speaker: 'PERFORMER', text: "Got me an M.L. degree from Stanford, class of GPT. Moved out to the Mission, full of dreams and ambition. Left my internship at Google Brain, thought I'd train the next big thing. Made a model, kind of mid — called it Jarvis, raised a bid." },
+        { speaker: 'PERFORMER', text: "Startup with no revenue, raise a hundred million too. Put AI and crypto stuff, now it's finally dumb enough. Happy days are here again — Elon Musk, Sam Altman. Time to write a business plan, so I can be like those guys." },
+      ]},
+      { id: 2, label: 'Chorus 1', lines: [
+        { speaker: 'PERFORMER', text: "Here comes another bubble! It's a monster rally, all around the valley. Demos filled with sleight of hand, AI wrappers barely stand. But if the hype is big enough, no one asks you to do stuff. Let's yell pivot, higher, fast — bail out, just outlast." },
+      ]},
+      { id: 3, label: 'Verse 2', lines: [
+        { speaker: 'PERFORMER', text: "Moonshot deck, 10x plan — VC thinks I'm the man. Chatbot, therapist, startup, nihilist. Pump injection, jailbreak scripts, CEO with ego trips." },
+        { speaker: 'PERFORMER', text: "Press release with zero blue. Grok, is that true? Deepfake nudes, lawsuit wrecks — now it's stealing indie sets." },
+      ]},
+      { id: 4, label: 'Chorus 2', lines: [
+        { speaker: 'PERFORMER', text: "Here comes another bubble! But VCs are backing, baby, let's get cracking." },
+        { speaker: 'PERFORMER', text: "Tweet, tweet, tweet it all — tweet it if it's big or small. Tweet your threads on moral worth, tweet like you invented birth. Tweet like you're a prophet king, tweet your takes on everything. Tweet — even if you're wrong — won't you tweet about the song?" },
+      ]},
+      { id: 5, label: 'Verse 3', lines: [
+        { speaker: 'PERFORMER', text: "Every party, all dudes — house rules, no shoes. All on Twitter all the time, cutting tapes instead of lines." },
+        { speaker: 'PERFORMER', text: "Got to YC, still feel beige — all these guys are half my age. Twenty-nine, past my prime — I feel so behind the times." },
+      ]},
+      { id: 6, label: 'Chorus 3', lines: [
+        { speaker: 'PERFORMER', text: "Here comes another bubble! In a year we swear — we'll all be billionaires." },
+      ]},
+      { id: 7, label: 'Verse 4', lines: [
+        { speaker: 'PERFORMER', text: "Make yourself a million bucks — partly skill, mostly luck. Now you're rich enough to pay for a one-bed in Noe." },
+        { speaker: 'PERFORMER', text: "Want a yard and extra room? Maybe join a polycule. Flip the written, flip the chores — open floor plan, open doors. Make yourself a billion bucks, pay for games and venture luck." },
+      ]},
+      { id: 8, label: 'Outro', lines: [
+        { speaker: 'PERFORMER', text: "Buy a ranch, a private zoo — with a goat that quotes Marc Andreessen too. Build yourself a rocket ship, blast off on an ego trip." },
+        { speaker: 'PERFORMER', text: "Can this really be the end? Back to work you go again. Here comes another bubble — with the game you're on, it's still going on, and on, and on... pop." },
+      ]},
+    ],
+    macroSections: [
+      { id: 'all', label: 'Full Song', chunks: [1,2,3,4,5,6,7,8] },
+      { id: 'm1', label: 'Act I', chunks: [1,2] },
+      { id: 'm2', label: 'Act II', chunks: [3,4] },
+      { id: 'm3', label: 'Act III', chunks: [5,6] },
+      { id: 'm4', label: 'Finale', chunks: [7,8] },
+    ],
+    createdAt: new Date().toISOString(),
+  },
 ]
 
-const RTL_LANGS = ['ar-SA', 'he-IL']
+/* ═══════════════════════════════════════════════════════════════════════════
+   STORAGE + PARSER
+   ═══════════════════════════════════════════════════════════════════════════ */
 
-const STORAGE_KEY = 'skit-trainer-texts'
+const STORAGE_KEY = 'skit-trainer-library'
+const PROGRESS_KEY = 'skit-trainer-progress'
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function generateId(): string {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
-}
-
-function loadTexts(): SavedText[] {
+function loadLibrary(): Skit[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? JSON.parse(raw) as SavedText[] : []
-  } catch {
-    return []
-  }
+    const saved = raw ? JSON.parse(raw) as Skit[] : []
+    const ids = new Set(saved.map(s => s.id))
+    const merged = [...saved]
+    for (const seed of SEED_SKITS) { if (!ids.has(seed.id)) merged.push(seed) }
+    return merged
+  } catch { return [...SEED_SKITS] }
 }
-
-function saveTexts(texts: SavedText[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(texts))
+function saveLibrary(skits: Skit[]) { localStorage.setItem(STORAGE_KEY, JSON.stringify(skits)) }
+function loadProgress(id: string): SkitProgress {
+  try { const r = localStorage.getItem(`${PROGRESS_KEY}-${id}`); return r ? JSON.parse(r) : { chunkMastery: {} } }
+  catch { return { chunkMastery: {} } }
 }
+function saveProgress(id: string, p: SkitProgress) { localStorage.setItem(`${PROGRESS_KEY}-${id}`, JSON.stringify(p)) }
 
-function splitLines(text: string): string[] {
-  return text.split('\n').filter(l => l.trim().length > 0)
-}
-
-function chunkArray<T>(arr: T[], size: number): T[][] {
-  const chunks: T[][] = []
-  for (let i = 0; i < arr.length; i += size) {
-    chunks.push(arr.slice(i, i + size))
-  }
-  return chunks
-}
-
-function getMasteryPercent(mastery: Record<number, 'perfect' | 'close' | 'missed' | null>, totalLines: number): number {
-  if (totalLines === 0) return 0
-  let score = 0
-  for (let i = 0; i < totalLines; i++) {
-    const m = mastery[i]
-    if (m === 'perfect') score += 1
-    else if (m === 'close') score += 0.5
-  }
-  return Math.round((score / totalLines) * 100)
-}
-
-function removeRandomWords(text: string, percent: number): { display: string; blanks: { index: number; word: string }[] } {
-  const words = text.split(/\s+/)
-  const blanks: { index: number; word: string }[] = []
-  const indices = words.map((_, i) => i)
-  // Shuffle and pick
-  for (let i = indices.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [indices[i], indices[j]] = [indices[j], indices[i]]
-  }
-  const count = Math.max(1, Math.round(words.length * percent))
-  const toRemove = new Set(indices.slice(0, count))
-  const display = words.map((w, i) => {
-    if (toRemove.has(i)) {
-      blanks.push({ index: i, word: w })
-      return '____'
-    }
-    return w
-  }).join(' ')
-  return { display, blanks }
-}
-
-function getFirstLetters(line: string): string {
-  return line.split(/\s+/).map(w => {
-    if (w.length === 0) return ''
-    // Keep punctuation attached
-    const first = w[0]
-    const rest = w.slice(1).replace(/[a-zA-Z\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]/g, '_')
-    return first + rest
-  }).join(' ')
-}
-
-// ─── TTS ─────────────────────────────────────────────────────────────────────
-
-function speakLine(text: string, lang: string): Promise<void> {
-  return new Promise((resolve) => {
-    if (!('speechSynthesis' in window)) { resolve(); return }
-    window.speechSynthesis.cancel()
-    const u = new SpeechSynthesisUtterance(text)
-    u.lang = lang
-    u.rate = 0.9
-    u.onend = () => resolve()
-    u.onerror = () => resolve()
-    window.speechSynthesis.speak(u)
+function parseSkit(raw: string, title: string): Skit {
+  const paras = raw.split(/\n\s*\n/).filter(p => p.trim())
+  const speakerPat = /^([A-Z][A-Z0-9 ]+):\s*/
+  const speakers = new Set<string>()
+  const chunks: Chunk[] = paras.map((para, i) => {
+    const lines: Line[] = para.split('\n').filter(l => l.trim()).map(l => {
+      const m = l.match(speakerPat)
+      if (m) { speakers.add(m[1]); return { speaker: m[1], text: l.replace(speakerPat, '').trim() } }
+      return { speaker: '', text: l.trim() }
+    })
+    return { id: i + 1, label: `Section ${i + 1}`, lines }
   })
+  const allIds = chunks.map(c => c.id)
+  const macros: MacroSection[] = [{ id: 'all', label: 'Full Text', chunks: allIds }]
+  for (let i = 0; i < chunks.length; i += 3) {
+    const s = allIds.slice(i, i + 3)
+    macros.push({ id: `s${i}`, label: `Part ${Math.floor(i/3)+1}`, chunks: s })
+  }
+  const wordCount = chunks.reduce((a, c) => a + c.lines.reduce((b, l) => b + l.text.split(/\s+/).length, 0), 0)
+  return {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    title, subtitle: `${chunks.length} sections · ${chunks.reduce((a,c) => a+c.lines.length, 0)} lines · ${wordCount} words`,
+    speakers: [...speakers].length ? [...speakers] : [''],
+    chunks, macroSections: macros, createdAt: new Date().toISOString(),
+  }
 }
 
-function stopSpeech() {
-  if ('speechSynthesis' in window) window.speechSynthesis.cancel()
+function countWords(skit: Skit) {
+  return skit.chunks.reduce((a, c) => a + c.lines.reduce((b, l) => b + l.text.split(/\s+/).length, 0), 0)
 }
 
-// ─── Animation ───────────────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════════════════
+   SHARE ENCODING / DECODING
+   ═══════════════════════════════════════════════════════════════════════════ */
 
-const fadeVariants = {
-  initial: { opacity: 0, y: 12 },
-  animate: { opacity: 1, y: 0 },
-  exit: { opacity: 0, y: -12 },
+function encodeSkitForShare(skit: Skit): string {
+  try {
+    const data = {
+      title: skit.title,
+      subtitle: skit.subtitle,
+      speakers: skit.speakers,
+      chunks: skit.chunks,
+      macroSections: skit.macroSections,
+    }
+    return btoa(JSON.stringify(data))
+  } catch { return '' }
 }
 
-const fadeTransition = { duration: 0.25, ease: 'easeOut' as const }
+function decodeSkitFromUrl(encoded: string): Skit | null {
+  try {
+    const data = JSON.parse(atob(encoded))
+    if (!data.title || !data.chunks) return null
+    return {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      title: data.title,
+      subtitle: data.subtitle || '',
+      speakers: data.speakers || [''],
+      chunks: data.chunks,
+      macroSections: data.macroSections || [{ id: 'all', label: 'Full Text', chunks: data.chunks.map((c: Chunk) => c.id) }],
+      createdAt: new Date().toISOString(),
+    }
+  } catch { return null }
+}
 
-function FadeIn({ children, delay = 0 }: { children: ReactNode; delay?: number }) {
+/* ═══════════════════════════════════════════════════════════════════════════
+   TOOLS CONFIG — 4 tools (no Chunk)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const TOOLS: { id: Tool; label: string; icon: string }[] = [
+  { id: 'read', label: 'Read', icon: '\u{1F4D6}' },
+  { id: 'fill', label: 'Fill Blank', icon: '\u{270F}\u{FE0F}' },
+  { id: 'firstletter', label: 'First Letters', icon: '\u{1F524}' },
+  { id: 'rsvp', label: 'Speed Read', icon: '\u{26A1}' },
+]
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   STUDY GUIDE DATA
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const STUDY_STEPS: {
+  step: number; title: string; tool: Tool; icon: string
+  description: string; tip: string; citation: string
+}[] = [
+  {
+    step: 1, title: 'Read Through', tool: 'read', icon: '\u{1F4D6}',
+    description: 'Read the full text 2-3 times. First silently to understand meaning. Then aloud to feel the rhythm. Finally, read while visualizing the scenes.',
+    tip: 'Focus on understanding WHY each line exists. Emotional connections create stronger memories.',
+    citation: 'Craik & Lockhart, 1972 -- Depth of Processing',
+  },
+  {
+    step: 2, title: 'Chunk & Build', tool: 'read', icon: '\u{1F9F1}',
+    description: 'Break the text into sections. Master each section before moving on. Hide and test yourself on each chunk.',
+    tip: 'Working memory holds ~7 items. Master small pieces, then chain them together.',
+    citation: 'Miller, 1956 -- Chunking',
+  },
+  {
+    step: 3, title: 'Fill in the Blanks', tool: 'fill', icon: '\u{270F}\u{FE0F}',
+    description: 'Start at 20% blanks with first-letter hints. Increase to 50%, then 80%. The struggle of recalling IS the learning.',
+    tip: 'Active retrieval strengthens memory far more than re-reading.',
+    citation: 'Roediger & Karpicke, 2006 -- Testing Effect',
+  },
+  {
+    step: 4, title: 'First Letters Only', tool: 'firstletter', icon: '\u{1F524}',
+    description: 'A single letter cue can trigger recall of the entire word. Use this to bridge between full text and pure recall.',
+    tip: "First-letter cues exploit your brain's pattern-completion machinery.",
+    citation: 'Tulving, 1966 -- Retrieval Cues',
+  },
+  {
+    step: 5, title: 'Speed Read', tool: 'rsvp', icon: '\u{26A1}',
+    description: 'Start slow (150 WPM) for encoding. Increase speed as familiarity grows. Multiple passes at increasing speeds builds fluency.',
+    tip: 'Presenting words at the Optimal Recognition Point eliminates eye movement and forces sequential processing.',
+    citation: 'Forster, 1970 -- RSVP',
+  },
+]
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PER-TOOL INSTRUCTIONS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const TOOL_INSTRUCTIONS: Record<Tool, string> = {
+  read: "Read through the text. Use the chunk selector to focus on specific sections. Click 'Hide & Test' on a chunk to test your recall.",
+  fill: 'Words are randomly blanked. Type the missing words and click Check. Use the difficulty buttons to increase the challenge. Tab/Enter moves between blanks.',
+  firstletter: 'Only the first letter of each word is shown. Try to recall the full word before tapping to reveal. Work section by section.',
+  rsvp: "Words appear one at a time at the center. The pink letter marks the optimal recognition point. Use Space to play/pause. Click any word in the text below to jump there.",
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TOAST COMPONENT
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function Toast({ message, onDone }: { message: string; onDone: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onDone, 2200)
+    return () => clearTimeout(t)
+  }, [onDone])
   return (
     <motion.div
-      initial={{ opacity: 0, y: 16 }}
+      initial={{ opacity: 0, y: 30 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35, delay, ease: 'easeOut' }}
+      exit={{ opacity: 0, y: 30 }}
+      style={{
+        position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+        background: 'var(--green-dark)', color: '#fff', padding: '10px 24px',
+        borderRadius: 'var(--radius)', fontSize: 14, fontWeight: 600,
+        boxShadow: '0 4px 20px rgba(0,0,0,0.3)', zIndex: 1000,
+      }}
     >
-      {children}
+      {message}
     </motion.div>
   )
 }
 
-// ─── Shared Components ───────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════════════════
+   INSTRUCTION PANEL (collapsible, per-tool)
+   ═══════════════════════════════════════════════════════════════════════════ */
 
-const css = {
-  container: {
-    maxWidth: 720,
-    margin: '0 auto',
-    padding: '24px 20px',
-    flex: 1,
-    width: '100%',
-  } satisfies CSSProperties,
-  card: {
-    background: 'var(--surface)',
-    borderRadius: 'var(--radius)',
-    padding: '24px',
-    border: '1px solid var(--border)',
-  } satisfies CSSProperties,
-  btn: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    padding: '12px 24px',
-    borderRadius: 'var(--radius-sm)',
-    fontSize: '0.95rem',
-    fontWeight: 600,
-    transition: 'all 0.2s',
-    whiteSpace: 'nowrap' as const,
-  } satisfies CSSProperties,
-  btnPrimary: {
-    background: 'var(--accent)',
-    color: '#0f0f14',
-  } satisfies CSSProperties,
-  btnSecondary: {
-    background: 'var(--surface)',
-    border: '1px solid var(--border)',
-    color: 'var(--text)',
-  } satisfies CSSProperties,
-  btnSmall: {
-    padding: '8px 16px',
-    fontSize: '0.85rem',
-  } satisfies CSSProperties,
-  header: {
-    textAlign: 'center' as const,
-    marginBottom: 32,
-  } satisfies CSSProperties,
-  title: {
-    fontSize: '2rem',
-    fontWeight: 700,
-    color: 'var(--text)',
-    letterSpacing: '-0.02em',
-  } satisfies CSSProperties,
-  subtitle: {
-    color: 'var(--text-muted)',
-    fontSize: '1rem',
-    marginTop: 4,
-  } satisfies CSSProperties,
-  label: {
-    display: 'block',
-    fontSize: '0.85rem',
-    fontWeight: 500,
-    color: 'var(--text-muted)',
-    marginBottom: 6,
-  } satisfies CSSProperties,
-  lineNum: {
-    color: 'var(--text-muted)',
-    fontSize: '0.8rem',
-    minWidth: 28,
-    textAlign: 'right' as const,
-    marginRight: 12,
-    flexShrink: 0,
-    userSelect: 'none' as const,
-  } satisfies CSSProperties,
-  progressBar: {
-    width: '100%',
-    height: 4,
-    background: 'var(--border)',
-    borderRadius: 2,
-    overflow: 'hidden' as const,
-  } satisfies CSSProperties,
-}
-
-function ProgressBar({ value, color = 'var(--accent)' }: { value: number; color?: string }) {
+function InstructionPanel({ tool }: { tool: Tool }) {
+  const [open, setOpen] = useState(false)
   return (
-    <div style={css.progressBar}>
-      <motion.div
-        style={{ height: '100%', background: color, borderRadius: 2 }}
-        initial={{ width: 0 }}
-        animate={{ width: `${Math.min(100, Math.max(0, value))}%` }}
-        transition={{ duration: 0.4, ease: 'easeOut' }}
-      />
+    <div style={{ marginBottom: open ? 12 : 8 }}>
+      <button onClick={() => setOpen(!open)} style={{
+        fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500,
+        display: 'flex', alignItems: 'center', gap: 4,
+      }}>
+        <span style={{ fontSize: 11 }}>{open ? '\u25BC' : '\u25B6'}</span>
+        <span>ℹ️ How to use</span>
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.15 }}
+            style={{ overflow: 'hidden' }}
+          >
+            <p style={{
+              fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6,
+              padding: '8px 12px', marginTop: 4, background: 'var(--surface-alt)',
+              borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
+            }}>
+              {TOOL_INSTRUCTIONS[tool]}
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
 
-function StepIndicator({ current, total }: { current: number; total: number }) {
+/* ═══════════════════════════════════════════════════════════════════════════
+   CHUNK SELECTOR (shared, shown in all tools)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function ChunkSelector({ chunks, selected, onSelect }: {
+  chunks: Chunk[]; selected: number | null; onSelect: (id: number | null) => void
+}) {
+  if (chunks.length <= 1) return null
   return (
-    <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 20 }}>
-      {Array.from({ length: total }, (_, i) => (
-        <div
-          key={i}
-          style={{
-            width: i === current ? 24 : 8,
-            height: 8,
-            borderRadius: 4,
-            background: i === current ? 'var(--accent)' : i < current ? 'var(--success)' : 'var(--border)',
-            transition: 'all 0.3s',
-          }}
-        />
+    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 12 }}>
+      <button onClick={() => onSelect(null)} style={{
+        padding: '4px 12px', borderRadius: 16, fontSize: 11, fontWeight: 600,
+        background: selected === null ? 'var(--pink-faded)' : 'var(--surface-alt)',
+        color: selected === null ? 'var(--pink-dark)' : 'var(--text-secondary)',
+        border: `1px solid ${selected === null ? 'var(--pink)' : 'var(--border)'}`,
+      }}>All</button>
+      {chunks.map(c => (
+        <button key={c.id} onClick={() => onSelect(c.id)} style={{
+          padding: '4px 12px', borderRadius: 16, fontSize: 11, fontWeight: 600,
+          background: selected === c.id ? 'var(--pink-faded)' : 'var(--surface-alt)',
+          color: selected === c.id ? 'var(--pink-dark)' : 'var(--text-secondary)',
+          border: `1px solid ${selected === c.id ? 'var(--pink)' : 'var(--border)'}`,
+        }}>{c.label}</button>
       ))}
-      <span style={{ marginLeft: 8, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-        Step {current + 1} of {total}
-      </span>
     </div>
   )
 }
 
-// ─── App ─────────────────────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════════════════
+   APP
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 export default function App() {
-  const [view, setView] = useState<AppView>('landing')
-  const [texts, setTexts] = useState<SavedText[]>(loadTexts)
-  const [activeTextId, setActiveTextId] = useState<string | null>(null)
+  const [view, setView] = useState<View>('library')
+  const [library, setLibrary] = useState<Skit[]>(loadLibrary)
+  const [activeSkit, setActiveSkit] = useState<Skit | null>(null)
+  const [activeTool, setActiveTool] = useState<Tool>('read')
+  const [dark, setDark] = useState(false)
+  const [toast, setToast] = useState<string | null>(null)
 
-  const activeText = texts.find(t => t.id === activeTextId) ?? null
+  useEffect(() => { saveLibrary(library) }, [library])
+  useEffect(() => { document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light') }, [dark])
 
-  const updateTexts = useCallback((fn: (prev: SavedText[]) => SavedText[]) => {
-    setTexts(prev => {
-      const next = fn(prev)
-      saveTexts(next)
-      return next
+  // On load: check for ?skit= URL parameter
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const encoded = params.get('skit')
+    if (!encoded) return
+    const skit = decodeSkitFromUrl(encoded)
+    if (!skit) return
+    // Check for duplicate by title
+    setLibrary(prev => {
+      if (prev.some(s => s.title === skit.title)) {
+        // Already exists, just open it
+        const existing = prev.find(s => s.title === skit.title)!
+        setActiveSkit(existing)
+        setActiveTool('read')
+        setView('practice')
+        return prev
+      }
+      setActiveSkit(skit)
+      setActiveTool('read')
+      setView('practice')
+      return [...prev, skit]
+    })
+    // Clean URL
+    window.history.replaceState({}, '', window.location.pathname)
+  }, [])
+
+  const openSkit = useCallback((skit: Skit) => { setActiveSkit(skit); setActiveTool('read'); setView('practice') }, [])
+  const deleteSkit = useCallback((id: string) => {
+    if (SEED_SKITS.some(s => s.id === id)) return
+    setLibrary(prev => prev.filter(s => s.id !== id))
+  }, [])
+  const addSkit = useCallback((skit: Skit) => { setLibrary(prev => [...prev, skit]); openSkit(skit) }, [openSkit])
+
+  const shareSkit = useCallback((skit: Skit) => {
+    const encoded = encodeSkitForShare(skit)
+    if (!encoded) return
+    const url = `${window.location.origin}${window.location.pathname}?skit=${encoded}`
+    navigator.clipboard.writeText(url).then(() => {
+      setToast('Link copied!')
+    }).catch(() => {
+      // Fallback
+      const ta = document.createElement('textarea')
+      ta.value = url; document.body.appendChild(ta); ta.select(); document.execCommand('copy')
+      document.body.removeChild(ta)
+      setToast('Link copied!')
     })
   }, [])
 
-  const updateActive = useCallback((patch: Partial<SavedText>) => {
-    if (!activeTextId) return
-    updateTexts(prev => prev.map(t => t.id === activeTextId ? { ...t, ...patch } : t))
-  }, [activeTextId, updateTexts])
-
-  const startTraining = useCallback((id: string) => {
-    setActiveTextId(id)
-    setView('training')
-  }, [])
-
-  const goHome = useCallback(() => {
-    stopSpeech()
-    setView('landing')
-    setActiveTextId(null)
-  }, [])
-
-  // Global keyboard
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && view === 'training') {
-        goHome()
-      }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [view, goHome])
+  const allChunks = activeSkit?.chunks ?? []
+  const allLines = allChunks.flatMap(c => c.lines.map(l => ({ ...l, chunkId: c.id, chunkLabel: c.label })))
 
   return (
-    <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column', width: '100%' }}>
-      <AnimatePresence mode="wait">
-        {view === 'landing' ? (
-          <motion.div key="landing" variants={fadeVariants} initial="initial" animate="animate" exit="exit" transition={fadeTransition} style={{ flex: 1 }}>
-            <Landing texts={texts} updateTexts={updateTexts} onStart={startTraining} />
-          </motion.div>
-        ) : activeText ? (
-          <motion.div key="training" variants={fadeVariants} initial="initial" animate="animate" exit="exit" transition={fadeTransition} style={{ flex: 1 }}>
-            <Training text={activeText} onUpdate={updateActive} onHome={goHome} />
-          </motion.div>
-        ) : null}
+    <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column' }}>
+      {/* Header */}
+      <header style={{
+        padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 10,
+        borderBottom: '1px solid var(--border)', background: 'var(--surface)',
+      }}>
+        <span style={{ fontSize: 22 }}>{'\u{1F3AD}'}</span>
+        <span style={{ fontWeight: 800, fontSize: 17, color: 'var(--green-dark)' }}>Skit Trainer</span>
+        <div style={{ flex: 1 }} />
+        <button onClick={() => setDark(!dark)} style={{
+          width: 36, height: 36, borderRadius: 'var(--radius-sm)',
+          background: 'var(--surface-alt)', fontSize: 16, display: 'flex',
+          alignItems: 'center', justifyContent: 'center',
+        }}>{dark ? '\u2600\uFE0F' : '\u{1F319}'}</button>
+        {view === 'practice' && (
+          <button onClick={() => setView('library')} style={{
+            padding: '6px 14px', borderRadius: 'var(--radius-sm)',
+            background: 'var(--green-faded)', color: 'var(--green-dark)',
+            fontSize: 13, fontWeight: 600,
+          }}>{'\u2190'} Library</button>
+        )}
+      </header>
+
+      <main style={{ flex: 1, overflow: 'auto' }}>
+        <AnimatePresence mode="wait">
+          {view === 'library' && (
+            <motion.div key="lib" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              style={{ maxWidth: 640, margin: '0 auto', padding: 20 }}>
+              <LibraryView library={library} onOpen={openSkit} onDelete={deleteSkit} onImport={() => setView('import')} onShare={shareSkit} />
+            </motion.div>
+          )}
+          {view === 'import' && (
+            <motion.div key="imp" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              style={{ maxWidth: 640, margin: '0 auto', padding: 20 }}>
+              <ImportView onAdd={addSkit} onCancel={() => setView('library')} />
+            </motion.div>
+          )}
+          {view === 'practice' && activeSkit && (
+            <motion.div key="prac" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              style={{ maxWidth: 720, margin: '0 auto', padding: 20 }}>
+              <PracticeView skit={activeSkit} tool={activeTool} setTool={setActiveTool}
+                chunks={allChunks} lines={allLines} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </main>
+
+      {/* Toast */}
+      <AnimatePresence>
+        {toast && <Toast message={toast} onDone={() => setToast(null)} />}
       </AnimatePresence>
     </div>
   )
 }
 
-// ─── Landing ─────────────────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════════════════
+   LIBRARY
+   ═══════════════════════════════════════════════════════════════════════════ */
 
-function Landing({ texts, updateTexts, onStart }: {
-  texts: SavedText[]
-  updateTexts: (fn: (prev: SavedText[]) => SavedText[]) => void
-  onStart: (id: string) => void
+function LibraryView({ library, onOpen, onDelete, onImport, onShare }: {
+  library: Skit[]; onOpen: (s: Skit) => void; onDelete: (id: string) => void; onImport: () => void; onShare: (s: Skit) => void
 }) {
-  const [inputText, setInputText] = useState('')
-  const [inputTitle, setInputTitle] = useState('')
-  const [language, setLanguage] = useState('en-US')
+  return (
+    <>
+      <div style={{ marginBottom: 20 }}>
+        <h1 style={{ fontSize: 26, fontWeight: 800, color: 'var(--green-dark)', marginBottom: 2 }}>Your Library</h1>
+        <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Skits, monologues, songs, poems -- anything to memorize.</p>
+      </div>
+      <button onClick={onImport} style={{
+        width: '100%', padding: 14, borderRadius: 'var(--radius)',
+        background: 'var(--green-pale)', border: '2px dashed var(--green-mid)',
+        fontSize: 15, fontWeight: 700, color: 'var(--green-main)', marginBottom: 20,
+      }}>+ Add New Text</button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {library.map(skit => (
+          <div key={skit.id} onClick={() => onOpen(skit)} style={{
+            background: 'var(--surface)', borderRadius: 'var(--radius)',
+            border: '1.5px solid var(--border)', padding: '14px 16px', cursor: 'pointer',
+            transition: 'border-color 0.15s, box-shadow 0.15s',
+          }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--green-main)'; e.currentTarget.style.boxShadow = '0 2px 12px rgba(5,150,105,0.1)' }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.boxShadow = 'none' }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <h3 style={{ fontWeight: 700, fontSize: 15, color: 'var(--green-dark)' }}>{skit.title}</h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: 12, marginTop: 2 }}>{skit.subtitle}</p>
+              </div>
+              <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                <button onClick={e => { e.stopPropagation(); onShare(skit) }} title="Share" style={{
+                  fontSize: 12, color: 'var(--text-secondary)', padding: '4px 8px', borderRadius: 4,
+                  background: 'var(--surface-alt)', border: '1px solid var(--border)',
+                  fontWeight: 500,
+                }}>{'\u{1F517}'} Share</button>
+                {!SEED_SKITS.some(s => s.id === skit.id) && (
+                  <button onClick={e => { e.stopPropagation(); onDelete(skit.id) }} style={{
+                    fontSize: 11, color: 'var(--text-dim)', padding: '4px 8px', borderRadius: 4,
+                    background: 'var(--surface-alt)', border: '1px solid var(--border)',
+                  }}>{'\u2715'}</button>
+                )}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 14, marginTop: 6, fontSize: 12, color: 'var(--text-dim)' }}>
+              <span>{skit.chunks.length} sections</span>
+              <span>{skit.chunks.reduce((a,c) => a+c.lines.length, 0)} lines</span>
+              <span>{countWords(skit)} words</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  )
+}
 
-  const handleCreate = () => {
-    if (!inputText.trim()) return
-    const newText: SavedText = {
-      id: generateId(),
-      title: inputTitle.trim() || `Text ${texts.length + 1}`,
-      text: inputText.trim(),
-      language,
-      day: 1,
-      step: 0,
-      lineMastery: {},
-      completedDays: [],
-      createdAt: Date.now(),
-    }
-    updateTexts(prev => [newText, ...prev])
-    setInputText('')
-    setInputTitle('')
-    onStart(newText.id)
-  }
+/* ═══════════════════════════════════════════════════════════════════════════
+   IMPORT
+   ═══════════════════════════════════════════════════════════════════════════ */
 
-  const handleDelete = (id: string) => {
-    updateTexts(prev => prev.filter(t => t.id !== id))
-  }
+function ImportView({ onAdd, onCancel }: { onAdd: (s: Skit) => void; onCancel: () => void }) {
+  const [title, setTitle] = useState('')
+  const [text, setText] = useState('')
+  const ok = title.trim() && text.trim()
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <h2 style={{ fontWeight: 800, fontSize: 20, color: 'var(--green-dark)' }}>Add New Text</h2>
+        <button onClick={onCancel} style={{ padding: '5px 14px', borderRadius: 'var(--radius-sm)', background: 'var(--surface-alt)', fontSize: 13, fontWeight: 500 }}>Cancel</button>
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4, color: 'var(--text-secondary)' }}>Title</label>
+        <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g., Hamlet's Soliloquy" />
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4, color: 'var(--text-secondary)' }}>Text</label>
+        <textarea value={text} onChange={e => setText(e.target.value)}
+          placeholder={"Paste your text here.\n\nBlank lines \u2192 sections.\nSPEAKER: text \u2192 dialogue."} style={{ minHeight: 200 }} />
+      </div>
+      <button onClick={() => ok && onAdd(parseSkit(text, title.trim()))} disabled={!ok} style={{
+        width: '100%', padding: 13, borderRadius: 'var(--radius)',
+        background: ok ? 'var(--green-main)' : 'var(--border)',
+        color: ok ? '#fff' : 'var(--text-dim)', fontSize: 15, fontWeight: 700,
+        cursor: ok ? 'pointer' : 'not-allowed',
+      }}>Start Practicing</button>
+    </>
+  )
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   STUDY GUIDE
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function StudyGuide({ onNavigate }: { onNavigate: (tool: Tool) => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <button onClick={() => setOpen(!open)} style={{
+        padding: '8px 16px', borderRadius: 'var(--radius-sm)',
+        background: open ? 'var(--green-faded)' : 'var(--surface-alt)',
+        border: `1px solid ${open ? 'var(--green-mid)' : 'var(--border)'}`,
+        fontSize: 13, fontWeight: 600,
+        color: open ? 'var(--green-dark)' : 'var(--text-secondary)',
+        display: 'flex', alignItems: 'center', gap: 6,
+      }}>
+        <span>{'\u{1F4CB}'}</span> Study Guide
+        <span style={{ fontSize: 10, marginLeft: 4 }}>{open ? '\u25B2' : '\u25BC'}</span>
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }}
+            style={{ overflow: 'hidden' }}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+              {STUDY_STEPS.map(s => (
+                <div key={s.step} style={{
+                  background: 'var(--surface)', border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius)', padding: '12px 14px',
+                  display: 'flex', gap: 12, alignItems: 'flex-start',
+                }}>
+                  <div style={{
+                    width: 36, height: 36, borderRadius: '50%',
+                    background: 'var(--green-faded)', display: 'flex',
+                    alignItems: 'center', justifyContent: 'center',
+                    fontSize: 16, flexShrink: 0,
+                  }}>{s.icon}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text)' }}>
+                        Step {s.step}: {s.title}
+                      </span>
+                      <button onClick={() => { onNavigate(s.tool); setOpen(false) }} style={{
+                        fontSize: 11, fontWeight: 700, color: 'var(--pink)',
+                        padding: '3px 10px', borderRadius: 12,
+                        background: 'var(--pink-faded)', border: '1px solid var(--pink-mid)',
+                        flexShrink: 0,
+                      }}>Go {'\u2192'}</button>
+                    </div>
+                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 4 }}>{s.description}</p>
+                    <p style={{ fontSize: 11, color: 'var(--text-dim)', fontStyle: 'italic', lineHeight: 1.4 }}>
+                      {'\u{1F4A1}'} {s.tip} <span style={{ opacity: 0.7 }}>({s.citation})</span>
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PRACTICE -- title + stats + study guide + tools + content
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function PracticeView({ skit, tool, setTool, chunks, lines }: {
+  skit: Skit; tool: Tool; setTool: (t: Tool) => void
+  chunks: Chunk[]; lines: { speaker: string; text: string; chunkId: number; chunkLabel: string }[]
+}) {
+  const [selectedChunk, setSelectedChunk] = useState<number | null>(null)
+
+  // Filter lines and chunks based on selection
+  const filteredChunks = selectedChunk !== null ? chunks.filter(c => c.id === selectedChunk) : chunks
+  const filteredLines = selectedChunk !== null
+    ? lines.filter(l => l.chunkId === selectedChunk)
+    : lines
 
   return (
-    <div style={css.container}>
-      <FadeIn>
-        <div style={{ ...css.header, marginTop: 40, marginBottom: 48 }}>
-          <h1 style={{ ...css.title, fontSize: '2.5rem' }}>Skit Trainer</h1>
-          <p style={{ ...css.subtitle, fontSize: '1.1rem' }}>Memorize anything in 3 days</p>
-        </div>
-      </FadeIn>
-
-      <FadeIn delay={0.1}>
-        <div style={{ ...css.card, marginBottom: 32 }}>
-          <div style={{ marginBottom: 16 }}>
-            <label style={css.label}>Title (optional)</label>
-            <input
-              value={inputTitle}
-              onChange={e => setInputTitle(e.target.value)}
-              placeholder="My poem, speech, monologue..."
-            />
-          </div>
-
-          <div style={{ marginBottom: 16 }}>
-            <label style={css.label}>Text to memorize</label>
-            <textarea
-              value={inputText}
-              onChange={e => setInputText(e.target.value)}
-              placeholder="Paste your text here..."
-              rows={8}
-              style={{ minHeight: 180 }}
-            />
-          </div>
-
-          <div style={{ display: 'flex', gap: 12, alignItems: 'end', flexWrap: 'wrap' }}>
-            <div style={{ flex: 1, minWidth: 160 }}>
-              <label style={css.label}>Language (for TTS)</label>
-              <select value={language} onChange={e => setLanguage(e.target.value)}>
-                {LANGUAGES.map(l => (
-                  <option key={l.code} value={l.code}>{l.label}</option>
-                ))}
-              </select>
-            </div>
-            <button
-              onClick={handleCreate}
-              disabled={!inputText.trim()}
-              style={{
-                ...css.btn,
-                ...css.btnPrimary,
-                opacity: inputText.trim() ? 1 : 0.4,
-                minWidth: 160,
-              }}
-            >
-              Start Training
-            </button>
-          </div>
-        </div>
-      </FadeIn>
-
-      {texts.length > 0 && (
-        <FadeIn delay={0.2}>
-          <div>
-            <h2 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: 12, color: 'var(--text-muted)' }}>
-              Your Texts
-            </h2>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {texts.map(t => {
-                const lines = splitLines(t.text)
-                const mastery = getMasteryPercent(t.lineMastery, lines.length)
-                const allDone = t.completedDays.length >= 3
-                return (
-                  <div
-                    key={t.id}
-                    style={{
-                      ...css.card,
-                      padding: '16px 20px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 16,
-                      cursor: 'pointer',
-                    }}
-                    onClick={() => onStart(t.id)}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={e => e.key === 'Enter' && onStart(t.id)}
-                  >
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 600, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {t.title}
-                      </div>
-                      <div style={{ display: 'flex', gap: 12, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                        <span>{lines.length} lines</span>
-                        <span>Day {Math.min(t.day, 3)}/3</span>
-                        {mastery > 0 && <span style={{ color: allDone ? 'var(--success)' : 'var(--accent)' }}>{mastery}% mastered</span>}
-                      </div>
-                      <div style={{ marginTop: 8 }}>
-                        <ProgressBar value={allDone ? 100 : ((t.day - 1) / 3) * 100} color={allDone ? 'var(--success)' : 'var(--accent)'} />
-                      </div>
-                    </div>
-                    <button
-                      onClick={e => { e.stopPropagation(); handleDelete(t.id) }}
-                      style={{ ...css.btn, ...css.btnSmall, color: 'var(--text-muted)', padding: '6px 10px', fontSize: '0.8rem' }}
-                      title="Delete"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        </FadeIn>
-      )}
-
-      <div style={{ marginTop: 'auto', padding: '32px 0', textAlign: 'center' }}>
-        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-          All data stored locally in your browser.
+    <>
+      <div style={{ marginBottom: 14 }}>
+        <h2 style={{ fontWeight: 800, fontSize: 20, color: 'var(--green-dark)' }}>{skit.title}</h2>
+        <p style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
+          {skit.chunks.length} sections {'\u00B7'} {skit.chunks.reduce((a,c)=>a+c.lines.length,0)} lines {'\u00B7'} {countWords(skit)} words
         </p>
       </div>
-    </div>
-  )
-}
 
-// ─── Training ────────────────────────────────────────────────────────────────
+      {/* Study Guide */}
+      <StudyGuide onNavigate={setTool} />
 
-function Training({ text, onUpdate, onHome }: {
-  text: SavedText
-  onUpdate: (patch: Partial<SavedText>) => void
-  onHome: () => void
-}) {
-  const lines = splitLines(text.text)
-  const isRtl = RTL_LANGS.includes(text.language)
-  const allDone = text.completedDays.length >= 3
-
-  const setStep = (step: number) => onUpdate({ step })
-
-  const completeDay = (day: number) => {
-    const completed = text.completedDays.includes(day) ? text.completedDays : [...text.completedDays, day]
-    const nextDay = day < 3 ? day + 1 : day
-    onUpdate({ completedDays: completed, day: nextDay, step: 0 })
-  }
-
-  // If all days done, show review
-  if (allDone) {
-    return <ReviewView text={text} lines={lines} isRtl={isRtl} onUpdate={onUpdate} onHome={onHome} />
-  }
-
-  return (
-    <div style={css.container} dir={isRtl ? 'rtl' : 'ltr'}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
-        <button onClick={onHome} style={{ ...css.btn, ...css.btnSmall, ...css.btnSecondary }}>
-          Back
-        </button>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 600, fontSize: '1.1rem' }}>{text.title}</div>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Day {text.day} of 3</div>
-        </div>
-      </div>
-
-      <ProgressBar value={(text.step / (text.day === 1 ? 4 : text.day === 2 ? 4 : 3)) * 100} />
-      <div style={{ height: 20 }} />
-
-      <AnimatePresence mode="wait">
-        <motion.div key={`${text.day}-${text.step}`} variants={fadeVariants} initial="initial" animate="animate" exit="exit" transition={fadeTransition}>
-          {text.day === 1 && <Day1 text={text} lines={lines} step={text.step} setStep={setStep} completeDay={() => completeDay(1)} isRtl={isRtl} />}
-          {text.day === 2 && <Day2 text={text} lines={lines} step={text.step} setStep={setStep} completeDay={() => completeDay(2)} onUpdate={onUpdate} isRtl={isRtl} />}
-          {text.day === 3 && <Day3 text={text} lines={lines} step={text.step} setStep={setStep} completeDay={() => completeDay(3)} onUpdate={onUpdate} isRtl={isRtl} />}
-        </motion.div>
-      </AnimatePresence>
-    </div>
-  )
-}
-
-// ─── Day 1: Familiarize ──────────────────────────────────────────────────────
-
-function Day1({ text, lines, step, setStep, completeDay, isRtl }: {
-  text: SavedText; lines: string[]; step: number; setStep: (s: number) => void; completeDay: () => void; isRtl: boolean
-}) {
-  const totalSteps = 4
-
-  if (step === 0) {
-    return (
-      <DayIntro
-        day={1}
-        title="Familiarize"
-        description="Today you'll read, listen, and start chunking the text into memory."
-        onStart={() => setStep(1)}
-      />
-    )
-  }
-
-  return (
-    <div>
-      <StepIndicator current={step - 1} total={totalSteps} />
-
-      {step === 1 && (
-        <Step title="Read Through" subtitle="Read the entire text carefully. Notice patterns and structure.">
-          <TextDisplay lines={lines} isRtl={isRtl} />
-          <NavButtons onNext={() => setStep(2)} />
-        </Step>
-      )}
-
-      {step === 2 && (
-        <ListenStep lines={lines} lang={text.language} isRtl={isRtl} onNext={() => setStep(3)} />
-      )}
-
-      {step === 3 && (
-        <ReadAlongStep lines={lines} lang={text.language} isRtl={isRtl} onNext={() => setStep(4)} />
-      )}
-
-      {step === 4 && (
-        <ChunkStep lines={lines} isRtl={isRtl} onComplete={completeDay} />
-      )}
-    </div>
-  )
-}
-
-// ─── Day 2: Reinforce ────────────────────────────────────────────────────────
-
-function Day2({ text, lines, step, setStep, completeDay, onUpdate, isRtl }: {
-  text: SavedText; lines: string[]; step: number; setStep: (s: number) => void; completeDay: () => void; onUpdate: (p: Partial<SavedText>) => void; isRtl: boolean
-}) {
-  const totalSteps = 4
-
-  if (step === 0) {
-    return (
-      <DayIntro
-        day={2}
-        title="Reinforce"
-        description="Time to test your memory with gaps, first letters, and recall challenges."
-        onStart={() => setStep(1)}
-      />
-    )
-  }
-
-  return (
-    <div>
-      <StepIndicator current={step - 1} total={totalSteps} />
-
-      {step === 1 && (
-        <TimedReadStep lines={lines} isRtl={isRtl} onNext={() => setStep(2)} />
-      )}
-
-      {step === 2 && (
-        <FillGapsStep lines={lines} isRtl={isRtl} onNext={() => setStep(3)} />
-      )}
-
-      {step === 3 && (
-        <FirstLettersStep lines={lines} isRtl={isRtl} onNext={() => setStep(4)} />
-      )}
-
-      {step === 4 && (
-        <SpeakItStep lines={lines} isRtl={isRtl} onComplete={completeDay} onUpdate={onUpdate} savedText={text} />
-      )}
-    </div>
-  )
-}
-
-// ─── Day 3: Master ───────────────────────────────────────────────────────────
-
-function Day3({ text, lines, step, setStep, completeDay, onUpdate, isRtl }: {
-  text: SavedText; lines: string[]; step: number; setStep: (s: number) => void; completeDay: () => void; onUpdate: (p: Partial<SavedText>) => void; isRtl: boolean
-}) {
-  const totalSteps = 3
-
-  if (step === 0) {
-    return (
-      <DayIntro
-        day={3}
-        title="Master"
-        description="The final test. Recall everything from memory and prove your mastery."
-        onStart={() => setStep(1)}
-      />
-    )
-  }
-
-  return (
-    <div>
-      <StepIndicator current={step - 1} total={totalSteps} />
-
-      {step === 1 && (
-        <FullRecallStep lines={lines} isRtl={isRtl} onNext={() => setStep(2)} />
-      )}
-
-      {step === 2 && (
-        <RSVPStep lines={lines} onNext={() => setStep(3)} />
-      )}
-
-      {step === 3 && (
-        <FinalTestStep lines={lines} isRtl={isRtl} onComplete={completeDay} onUpdate={onUpdate} savedText={text} />
-      )}
-    </div>
-  )
-}
-
-// ─── Review ──────────────────────────────────────────────────────────────────
-
-function ReviewView({ text, lines, isRtl, onUpdate, onHome }: {
-  text: SavedText; lines: string[]; isRtl: boolean; onUpdate: (p: Partial<SavedText>) => void; onHome: () => void
-}) {
-  const mastery = getMasteryPercent(text.lineMastery, lines.length)
-  const [showWeak, setShowWeak] = useState(false)
-
-  const weakLines = lines.map((l, i) => ({ line: l, index: i })).filter(({ index }) => {
-    const m = text.lineMastery[index]
-    return m !== 'perfect'
-  })
-
-  const handleReset = () => {
-    onUpdate({ day: 1, step: 0, lineMastery: {}, completedDays: [] })
-  }
-
-  return (
-    <div style={css.container} dir={isRtl ? 'rtl' : 'ltr'}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
-        <button onClick={onHome} style={{ ...css.btn, ...css.btnSmall, ...css.btnSecondary }}>
-          Back
-        </button>
-        <div style={{ flex: 1, fontWeight: 600, fontSize: '1.1rem' }}>{text.title}</div>
-      </div>
-
-      <FadeIn>
-        <div style={{ ...css.card, textAlign: 'center', marginBottom: 24, padding: 40 }}>
-          {mastery >= 80 ? (
-            <>
-              <div style={{ fontSize: '3rem', marginBottom: 12 }}>Mastered!</div>
-              <div style={{ fontSize: '2.5rem', fontWeight: 700, color: 'var(--success)' }}>{mastery}%</div>
-            </>
-          ) : (
-            <>
-              <div style={{ fontSize: '1.5rem', marginBottom: 12 }}>Keep Practicing</div>
-              <div style={{ fontSize: '2.5rem', fontWeight: 700, color: 'var(--accent)' }}>{mastery}%</div>
-            </>
-          )}
-          <p style={{ color: 'var(--text-muted)', marginTop: 8 }}>Overall mastery</p>
-        </div>
-      </FadeIn>
-
-      <FadeIn delay={0.1}>
-        <div style={{ ...css.card, marginBottom: 16 }}>
-          <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: 16 }}>Line by Line Results</h3>
-          {lines.map((line, i) => {
-            const m = text.lineMastery[i]
-            const color = m === 'perfect' ? 'var(--success)' : m === 'close' ? 'var(--yellow)' : 'var(--error)'
-            const bg = m === 'perfect' ? 'var(--success-dim)' : m === 'close' ? 'var(--yellow-dim)' : 'var(--error-dim)'
-            return (
-              <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 12px', borderRadius: 'var(--radius-sm)', background: bg, marginBottom: 4 }}>
-                <span style={{ ...css.lineNum, color }}>{i + 1}</span>
-                <span style={{ flex: 1, fontSize: '0.95rem' }}>{line}</span>
-                <span style={{ fontSize: '0.75rem', fontWeight: 600, color, textTransform: 'uppercase', flexShrink: 0 }}>
-                  {m || 'unrated'}
-                </span>
-              </div>
-            )
-          })}
-        </div>
-      </FadeIn>
-
-      <FadeIn delay={0.15}>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {weakLines.length > 0 && (
-            <button onClick={() => setShowWeak(!showWeak)} style={{ ...css.btn, ...css.btnSecondary }}>
-              {showWeak ? 'Hide' : 'Practice'} Weak Lines ({weakLines.length})
-            </button>
-          )}
-          <button onClick={handleReset} style={{ ...css.btn, ...css.btnSecondary }}>
-            Start Over
+      {/* Tool bar */}
+      <div className="tool-grid" style={{
+        display: 'grid', gridTemplateColumns: `repeat(${TOOLS.length}, 1fr)`, gap: 6, marginBottom: 16,
+      }}>
+        {TOOLS.map(t => (
+          <button key={t.id} onClick={() => setTool(t.id)} style={{
+            padding: '8px 6px', borderRadius: 'var(--radius-sm)', textAlign: 'center',
+            background: tool === t.id ? 'var(--pink-faded)' : 'var(--surface)',
+            border: `1.5px solid ${tool === t.id ? 'var(--pink)' : 'var(--border)'}`,
+            transition: 'all 0.12s',
+          }}>
+            <div style={{ fontSize: 16, marginBottom: 1 }}>{t.icon}</div>
+            <div style={{ fontSize: 11, fontWeight: tool === t.id ? 700 : 500, color: tool === t.id ? 'var(--pink-dark)' : 'var(--text-secondary)' }}>{t.label}</div>
           </button>
-          <button onClick={onHome} style={{ ...css.btn, ...css.btnPrimary }}>
-            New Text
-          </button>
-        </div>
-      </FadeIn>
-
-      {showWeak && weakLines.length > 0 && (
-        <FadeIn>
-          <div style={{ ...css.card, marginTop: 16 }}>
-            <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: 16 }}>Weak Lines — Practice</h3>
-            {weakLines.map(({ line, index }) => (
-              <RevealLine key={index} lineNum={index + 1} text={line} />
-            ))}
-          </div>
-        </FadeIn>
-      )}
-    </div>
-  )
-}
-
-// ─── Step Components ─────────────────────────────────────────────────────────
-
-function DayIntro({ day, title, description, onStart }: { day: number; title: string; description: string; onStart: () => void }) {
-  return (
-    <div style={{ ...css.card, textAlign: 'center', padding: 48 }}>
-      <div style={{ fontSize: '0.85rem', color: 'var(--accent)', fontWeight: 600, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-        Day {day}
+        ))}
       </div>
-      <h2 style={{ fontSize: '1.8rem', fontWeight: 700, marginBottom: 12 }}>{title}</h2>
-      <p style={{ color: 'var(--text-muted)', marginBottom: 32, maxWidth: 400, margin: '0 auto 32px' }}>{description}</p>
-      <button onClick={onStart} style={{ ...css.btn, ...css.btnPrimary }}>
-        Begin
-      </button>
-    </div>
+
+      {/* Content */}
+      <div style={{
+        background: 'var(--surface)', borderRadius: 'var(--radius)',
+        border: '1px solid var(--border)', padding: 18, minHeight: 180,
+      }}>
+        {/* Instruction panel */}
+        <InstructionPanel tool={tool} />
+
+        {/* Chunk selector */}
+        <ChunkSelector chunks={chunks} selected={selectedChunk} onSelect={setSelectedChunk} />
+
+        <AnimatePresence mode="wait">
+          <motion.div key={`${tool}-${selectedChunk}`} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }}>
+            {tool === 'read' && <ReadTool lines={filteredLines} chunks={filteredChunks} skitId={skit.id} singleChunk={selectedChunk !== null} />}
+            {tool === 'fill' && <FillTool lines={filteredLines} />}
+            {tool === 'firstletter' && <FirstLetterTool lines={filteredLines} />}
+            {tool === 'rsvp' && <RSVPTool lines={filteredLines} />}
+          </motion.div>
+        </AnimatePresence>
+      </div>
+    </>
   )
 }
 
-function Step({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
+/* ═══════════════════════════════════════════════════════════════════════════
+   READ — with optional chunk hide/test/rate controls
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function ReadTool({ lines, chunks, skitId, singleChunk }: {
+  lines: { speaker: string; text: string; chunkLabel: string; chunkId: number }[]
+  chunks: Chunk[]; skitId: string; singleChunk: boolean
+}) {
+  const [hidden, setHidden] = useState(false)
+  const [progress, setProgress] = useState<SkitProgress>(() => loadProgress(skitId))
+
+  // Reset hidden state when chunk changes
+  useEffect(() => { setHidden(false) }, [singleChunk, chunks])
+
+  const chunk = singleChunk && chunks.length === 1 ? chunks[0] : null
+  const mark = (val: number) => {
+    if (!chunk) return
+    const n = { ...progress, chunkMastery: { ...progress.chunkMastery, [chunk.id]: val } }
+    setProgress(n); saveProgress(skitId, n)
+  }
+  const mastery = chunk ? (progress.chunkMastery[chunk.id] || 0) : 0
+
+  let last = -1
   return (
     <div>
-      <h3 style={{ fontSize: '1.2rem', fontWeight: 600, marginBottom: 4 }}>{title}</h3>
-      <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: 20 }}>{subtitle}</p>
-      {children}
-    </div>
-  )
-}
-
-function TextDisplay({ lines, isRtl, highlightLine = -1 }: { lines: string[]; isRtl: boolean; highlightLine?: number }) {
-  return (
-    <div style={{ ...css.card, marginBottom: 16 }}>
-      {lines.map((line, i) => (
-        <div
-          key={i}
-          style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            padding: '8px 12px',
-            borderRadius: 'var(--radius-sm)',
-            background: highlightLine === i ? 'var(--accent-dim)' : 'transparent',
-            transition: 'background 0.3s',
-            direction: isRtl ? 'rtl' : 'ltr',
-          }}
-        >
-          <span style={css.lineNum}>{i + 1}</span>
-          <span style={{ flex: 1, fontSize: '1.05rem', lineHeight: 1.7 }}>{line}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function NavButtons({ onNext, onBack, nextLabel = 'Next Step', backLabel = 'Previous' }: {
-  onNext?: () => void; onBack?: () => void; nextLabel?: string; backLabel?: string
-}) {
-  return (
-    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
-      {onBack && <button onClick={onBack} style={{ ...css.btn, ...css.btnSecondary }}>{backLabel}</button>}
-      {onNext && <button onClick={onNext} style={{ ...css.btn, ...css.btnPrimary }}>{nextLabel}</button>}
-    </div>
-  )
-}
-
-function RevealLine({ lineNum, text }: { lineNum: number; text: string }) {
-  const [revealed, setRevealed] = useState(false)
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 8,
-        padding: '10px 12px',
-        borderRadius: 'var(--radius-sm)',
-        background: revealed ? 'transparent' : 'var(--surface-hover)',
-        cursor: 'pointer',
-        marginBottom: 4,
-        transition: 'background 0.2s',
-      }}
-      onClick={() => setRevealed(!revealed)}
-      role="button"
-      tabIndex={0}
-      onKeyDown={e => e.key === ' ' && setRevealed(!revealed)}
-    >
-      <span style={css.lineNum}>{lineNum}</span>
-      <span style={{ flex: 1, fontSize: '1rem', filter: revealed ? 'none' : 'blur(8px)', transition: 'filter 0.3s', userSelect: revealed ? 'auto' : 'none' }}>
-        {text}
-      </span>
-      {!revealed && (
-        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', flexShrink: 0 }}>tap to reveal</span>
-      )}
-    </div>
-  )
-}
-
-// ─── Day 1 Steps ─────────────────────────────────────────────────────────────
-
-function ListenStep({ lines, lang, isRtl, onNext }: { lines: string[]; lang: string; isRtl: boolean; onNext: () => void }) {
-  const [activeLine, setActiveLine] = useState(-1)
-  const [playing, setPlaying] = useState(false)
-  const cancelRef = useRef(false)
-
-  const play = async () => {
-    cancelRef.current = false
-    setPlaying(true)
-    for (let i = 0; i < lines.length; i++) {
-      if (cancelRef.current) break
-      setActiveLine(i)
-      await speakLine(lines[i], lang)
-      await new Promise(r => setTimeout(r, 300))
-    }
-    setActiveLine(-1)
-    setPlaying(false)
-  }
-
-  const stop = () => {
-    cancelRef.current = true
-    stopSpeech()
-    setPlaying(false)
-    setActiveLine(-1)
-  }
-
-  useEffect(() => () => { cancelRef.current = true; stopSpeech() }, [])
-
-  return (
-    <Step title="Listen" subtitle="Listen to each line being read aloud. Follow along.">
-      <TextDisplay lines={lines} isRtl={isRtl} highlightLine={activeLine} />
-      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-        <button onClick={playing ? stop : play} style={{ ...css.btn, ...css.btnSecondary }}>
-          {playing ? 'Stop' : 'Play'}
-        </button>
-        <button onClick={() => { stop(); onNext() }} style={{ ...css.btn, ...css.btnPrimary }}>Next Step</button>
-      </div>
-    </Step>
-  )
-}
-
-function ReadAlongStep({ lines, lang, isRtl, onNext }: { lines: string[]; lang: string; isRtl: boolean; onNext: () => void }) {
-  const [activeLine, setActiveLine] = useState(-1)
-  const [playing, setPlaying] = useState(false)
-  const cancelRef = useRef(false)
-
-  const play = async () => {
-    cancelRef.current = false
-    setPlaying(true)
-    for (let i = 0; i < lines.length; i++) {
-      if (cancelRef.current) break
-      setActiveLine(i)
-      await speakLine(lines[i], lang)
-      await new Promise(r => setTimeout(r, 200))
-    }
-    setActiveLine(-1)
-    setPlaying(false)
-  }
-
-  const stop = () => {
-    cancelRef.current = true
-    stopSpeech()
-    setPlaying(false)
-    setActiveLine(-1)
-  }
-
-  useEffect(() => () => { cancelRef.current = true; stopSpeech() }, [])
-
-  return (
-    <Step title="Read Along" subtitle="Read along as each line is spoken. Match the rhythm and pacing.">
-      <TextDisplay lines={lines} isRtl={isRtl} highlightLine={activeLine} />
-      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-        <button onClick={playing ? stop : play} style={{ ...css.btn, ...css.btnSecondary }}>
-          {playing ? 'Stop' : 'Play & Read Along'}
-        </button>
-        <button onClick={() => { stop(); onNext() }} style={{ ...css.btn, ...css.btnPrimary }}>Next Step</button>
-      </div>
-    </Step>
-  )
-}
-
-function ChunkStep({ lines, isRtl, onComplete }: { lines: string[]; isRtl: boolean; onComplete: () => void }) {
-  const chunks = chunkArray(lines, 3)
-  const [currentChunk, setCurrentChunk] = useState(0)
-  const [revealed, setRevealed] = useState(false)
-
-  const chunk = chunks[currentChunk]
-  const isLast = currentChunk === chunks.length - 1
-
-  return (
-    <Step title="Chunk It" subtitle={`Practice chunk ${currentChunk + 1} of ${chunks.length}. Read it, then try to recall without looking.`}>
-      <div style={css.card}>
-        {!revealed ? (
-          <div>
-            {chunk.map((line, i) => {
-              const globalIdx = currentChunk * 3 + i
-              return (
-                <div key={i} style={{ display: 'flex', alignItems: 'flex-start', padding: '8px 12px', direction: isRtl ? 'rtl' : 'ltr' }}>
-                  <span style={css.lineNum}>{globalIdx + 1}</span>
-                  <span style={{ flex: 1, fontSize: '1.05rem', lineHeight: 1.7 }}>{line}</span>
-                </div>
-              )
-            })}
-            <div style={{ textAlign: 'center', marginTop: 20 }}>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: 12 }}>Read this chunk, then hide it and try to recite.</p>
-              <button onClick={() => setRevealed(true)} style={{ ...css.btn, ...css.btnSecondary }}>
-                Hide & Test Myself
-              </button>
-            </div>
+      {/* Mastery indicator for single chunk */}
+      {singleChunk && chunk && (
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}>
+          <div style={{
+            height: 6, flex: 1, background: 'var(--border)', borderRadius: 3, overflow: 'hidden',
+          }}>
+            <div style={{
+              width: `${mastery}%`, height: '100%', borderRadius: 3,
+              background: mastery >= 80 ? 'var(--green-main)' : 'var(--pink)',
+              transition: 'width 0.3s',
+            }} />
           </div>
-        ) : (
-          <div>
-            <div style={{ textAlign: 'center', padding: '40px 0' }}>
-              <p style={{ fontSize: '1.1rem', marginBottom: 8 }}>Can you recite chunk {currentChunk + 1}?</p>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Try to say it from memory, then tap below to check.</p>
-            </div>
-            <button
-              onClick={() => setRevealed(false)}
-              style={{ ...css.btn, ...css.btnSecondary, width: '100%', marginBottom: 8 }}
-            >
-              Reveal & Check
-            </button>
-            {isLast ? (
-              <button onClick={onComplete} style={{ ...css.btn, ...css.btnPrimary, width: '100%' }}>
-                Complete Day 1
-              </button>
-            ) : (
-              <button onClick={() => { setCurrentChunk(c => c + 1); setRevealed(false) }} style={{ ...css.btn, ...css.btnPrimary, width: '100%' }}>
-                Next Chunk
-              </button>
+          <span style={{ fontSize: 10, color: 'var(--text-dim)', fontWeight: 600, minWidth: 28 }}>{mastery}%</span>
+        </div>
+      )}
+
+      {/* Lines */}
+      {lines.map((l, i) => {
+        const show = l.chunkId !== last; last = l.chunkId
+        return (
+          <div key={i}>
+            {show && !singleChunk && (
+              <div style={{
+                fontSize: 10, fontWeight: 700, color: 'var(--pink)',
+                textTransform: 'uppercase', letterSpacing: 1,
+                marginTop: i > 0 ? 18 : 0, marginBottom: 6,
+              }}>{l.chunkLabel}</div>
             )}
+            <div style={{
+              marginBottom: 6, lineHeight: 1.7,
+              opacity: hidden ? 0 : 1,
+              filter: hidden ? 'blur(8px)' : 'none',
+              transition: 'all 0.3s',
+              userSelect: hidden ? 'none' : 'auto',
+            }}>
+              {l.speaker && <span style={{ fontWeight: 700, color: 'var(--green-main)', marginRight: 8, fontSize: 12 }}>{l.speaker}:</span>}
+              <span>{l.text}</span>
+            </div>
           </div>
-        )}
-      </div>
-    </Step>
-  )
-}
+        )
+      })}
 
-// ─── Day 2 Steps ─────────────────────────────────────────────────────────────
-
-function TimedReadStep({ lines, isRtl, onNext }: { lines: string[]; isRtl: boolean; onNext: () => void }) {
-  const [started, setStarted] = useState(false)
-  const [elapsed, setElapsed] = useState(0)
-  const [done, setDone] = useState(false)
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  const start = () => {
-    setStarted(true)
-    const t0 = Date.now()
-    timerRef.current = setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 100)
-  }
-
-  const finish = () => {
-    if (timerRef.current) clearInterval(timerRef.current)
-    setDone(true)
-  }
-
-  useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current) }, [])
-
-  if (!started) {
-    return (
-      <Step title="Quick Read" subtitle="Read through the entire text as fast as you can. We'll time you.">
-        <button onClick={start} style={{ ...css.btn, ...css.btnPrimary }}>Start Timer</button>
-      </Step>
-    )
-  }
-
-  if (done) {
-    return (
-      <Step title="Quick Read" subtitle="Nice work!">
-        <div style={{ ...css.card, textAlign: 'center', padding: 32 }}>
-          <div style={{ fontSize: '2rem', fontWeight: 700, color: 'var(--accent)' }}>
-            {Math.floor(elapsed / 60)}:{(elapsed % 60).toString().padStart(2, '0')}
-          </div>
-          <p style={{ color: 'var(--text-muted)', marginTop: 8 }}>Time to read through</p>
+      {/* Hide & Test controls — only for single chunk mode */}
+      {singleChunk && chunk && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 14 }}>
+          <button onClick={() => setHidden(!hidden)} style={{
+            padding: '7px 14px', borderRadius: 'var(--radius-sm)',
+            background: hidden ? 'var(--pink-faded)' : 'var(--surface-alt)',
+            border: `1px solid ${hidden ? 'var(--pink)' : 'var(--border)'}`,
+            fontSize: 12, fontWeight: 600, color: hidden ? 'var(--pink-dark)' : 'var(--text)',
+          }}>{hidden ? '\u{1F441} Show' : '\u{1F648} Hide & Test'}</button>
+          {hidden && <>
+            <button onClick={() => mark(100)} style={{
+              padding: '7px 14px', borderRadius: 'var(--radius-sm)',
+              background: 'var(--green-faded)', border: '1px solid var(--green-mid)',
+              fontSize: 12, fontWeight: 600, color: 'var(--green-dark)',
+            }}>Got it {'\u2713'}</button>
+            <button onClick={() => mark(40)} style={{
+              padding: '7px 14px', borderRadius: 'var(--radius-sm)',
+              background: 'var(--pink-faded)', border: '1px solid var(--pink)',
+              fontSize: 12, fontWeight: 600, color: 'var(--pink-dark)',
+            }}>More practice</button>
+          </>}
         </div>
-        <NavButtons onNext={onNext} />
-      </Step>
-    )
-  }
-
-  return (
-    <Step title="Quick Read" subtitle={`Timer: ${Math.floor(elapsed / 60)}:${(elapsed % 60).toString().padStart(2, '0')}`}>
-      <TextDisplay lines={lines} isRtl={isRtl} />
-      <NavButtons onNext={finish} nextLabel="Done Reading" />
-    </Step>
+      )}
+    </div>
   )
 }
 
-function FillGapsStep({ lines, isRtl, onNext }: { lines: string[]; isRtl: boolean; onNext: () => void }) {
-  const [pass, setPass] = useState(1)
-  const percent = pass === 1 ? 0.2 : 0.4
-  const [gapped, setGapped] = useState(() => lines.map(l => removeRandomWords(l, percent)))
+/* ═══════════════════════════════════════════════════════════════════════════
+   FILL BLANK
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function FillTool({ lines }: { lines: { speaker: string; text: string }[] }) {
+  const [pct, setPct] = useState(30)
+  const [hintType, setHintType] = useState<'firstletter'|'wordcount'|'none'>('wordcount')
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [checked, setChecked] = useState(false)
+  const [gen, setGen] = useState(0)
+  const inputRefs = useRef<Record<string, HTMLInputElement | null>>({})
 
-  const regenerate = (p: number) => {
-    setGapped(lines.map(l => removeRandomWords(l, p)))
-    setAnswers({})
-    setChecked(false)
+  const tokens = useMemo(() =>
+    lines.flatMap((l, li) => l.text.split(/\s+/).map((w, wi) => ({ word: w, key: `${li}-${wi}`, li, wi, speaker: l.speaker }))),
+  [lines])
+
+  const blanked = useMemo(() => {
+    const eligible = tokens.filter(t => t.word.replace(/[^a-zA-Z]/g, '').length > 2).map(t => t.key)
+    const shuffled = [...eligible].sort(() => Math.random() - 0.5)
+    return new Set(shuffled.slice(0, Math.ceil(eligible.length * (pct / 100))))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tokens, pct, gen])
+
+  const blankKeys = useMemo(() => tokens.filter(t => blanked.has(t.key)).map(t => t.key), [tokens, blanked])
+  const normalize = (s: string) => (s||'').trim().replace(/[^a-zA-Z0-9']/g, '').toLowerCase()
+  const correct = (k: string) => normalize(tokens.find(t => t.key === k)!.word) === normalize(answers[k]||'')
+  const score = checked ? blankKeys.filter(correct).length : 0
+  const regenerate = () => { setGen(g => g+1); setAnswers({}); setChecked(false) }
+
+  const focusNext = (key: string) => {
+    const i = blankKeys.indexOf(key)
+    const next = blankKeys[(i+1) % blankKeys.length]
+    inputRefs.current[next]?.focus()
   }
 
-  const handleCheck = () => setChecked(true)
-
-  const allCorrect = checked && gapped.every((g, li) =>
-    g.blanks.every(b => {
-      const key = `${li}-${b.index}`
-      const ans = (answers[key] ?? '').trim().toLowerCase()
-      return ans === b.word.toLowerCase().replace(/[.,!?;:'"]/g, '')
-    })
-  )
+  const getHint = (word: string) => {
+    if (hintType === 'firstletter') return word[0] + '_'.repeat(word.replace(/[^a-zA-Z]/g,'').length - 1)
+    if (hintType === 'wordcount') return word.replace(/[^a-zA-Z]/g,'').length.toString()
+    return '___'
+  }
 
   return (
-    <Step title={`Fill the Gaps — Pass ${pass}`} subtitle={`${Math.round(percent * 100)}% of words removed. Type the missing words.`}>
-      <div style={{ ...css.card, marginBottom: 16 }}>
-        {gapped.map((g, li) => (
-          <div key={li} style={{ display: 'flex', alignItems: 'flex-start', padding: '6px 12px', gap: 8, direction: isRtl ? 'rtl' : 'ltr' }}>
-            <span style={css.lineNum}>{li + 1}</span>
-            <div style={{ flex: 1, fontSize: '1rem', lineHeight: 2, display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
-              {g.display.split(' ').map((word, wi) => {
-                if (word === '____') {
-                  const blank = g.blanks.find(b => {
-                    // Find the n-th blank
-                    const blanksBefore = g.display.split(' ').slice(0, wi).filter(w => w === '____').length
-                    return b === g.blanks[blanksBefore]
-                  })
-                  const key = `${li}-${blank?.index ?? wi}`
-                  const val = answers[key] ?? ''
-                  const correct = checked && blank && val.trim().toLowerCase() === blank.word.toLowerCase().replace(/[.,!?;:'"]/g, '')
-                  const wrong = checked && !correct
-                  return (
-                    <span key={wi} style={{ position: 'relative', display: 'inline-block' }}>
-                      <input
-                        value={val}
-                        onChange={e => setAnswers(a => ({ ...a, [key]: e.target.value }))}
-                        style={{
-                          width: Math.max(60, (blank?.word.length ?? 4) * 11),
-                          padding: '2px 6px',
-                          fontSize: '0.95rem',
-                          textAlign: 'center',
-                          borderColor: checked ? (correct ? 'var(--success)' : 'var(--error)') : 'var(--border)',
-                          background: checked ? (correct ? 'var(--success-dim)' : 'var(--error-dim)') : 'var(--surface)',
-                          borderRadius: 'var(--radius-sm)',
-                        }}
-                        disabled={checked}
-                        placeholder="..."
-                      />
-                      {wrong && blank && (
-                        <span style={{ fontSize: '0.7rem', color: 'var(--success)', display: 'block', textAlign: 'center' }}>
-                          {blank.word}
-                        </span>
-                      )}
-                    </span>
-                  )
-                }
-                return <span key={wi}>{word} </span>
-              })}
-            </div>
-          </div>
+    <div>
+      {/* Controls */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 600 }}>Blanks:</span>
+        {[20, 30, 50, 70, 100].map(p => (
+          <button key={p} onClick={() => { setPct(p); regenerate() }} style={{
+            padding: '3px 10px', borderRadius: 14, fontSize: 11, fontWeight: 600,
+            background: pct === p ? 'var(--pink-faded)' : 'var(--surface-alt)',
+            color: pct === p ? 'var(--pink-dark)' : 'var(--text-secondary)',
+            border: `1px solid ${pct === p ? 'var(--pink)' : 'var(--border)'}`,
+          }}>{p}%</button>
         ))}
       </div>
-
-      {!checked ? (
-        <NavButtons onNext={handleCheck} nextLabel="Check Answers" />
-      ) : (
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
-          {pass === 1 ? (
-            <button onClick={() => { setPass(2); regenerate(0.4) }} style={{ ...css.btn, ...css.btnPrimary }}>
-              {allCorrect ? 'Pass 2 (Harder)' : 'Try Pass 2'}
-            </button>
-          ) : (
-            <button onClick={onNext} style={{ ...css.btn, ...css.btnPrimary }}>Next Step</button>
-          )}
-        </div>
-      )}
-    </Step>
-  )
-}
-
-function FirstLettersStep({ lines, isRtl, onNext }: { lines: string[]; isRtl: boolean; onNext: () => void }) {
-  const [revealedLines, setRevealedLines] = useState<Set<number>>(new Set())
-
-  const toggle = (i: number) => {
-    setRevealedLines(prev => {
-      const next = new Set(prev)
-      if (next.has(i)) next.delete(i)
-      else next.add(i)
-      return next
-    })
-  }
-
-  return (
-    <Step title="First Letters" subtitle="Each word shows only its first letter. Try to recall the full text. Tap a line to reveal.">
-      <div style={{ ...css.card, marginBottom: 16 }}>
-        {lines.map((line, i) => {
-          const revealed = revealedLines.has(i)
-          return (
-            <div
-              key={i}
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                padding: '10px 12px',
-                borderRadius: 'var(--radius-sm)',
-                cursor: 'pointer',
-                direction: isRtl ? 'rtl' : 'ltr',
-                background: revealed ? 'var(--success-dim)' : 'transparent',
-                transition: 'background 0.2s',
-              }}
-              onClick={() => toggle(i)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={e => e.key === ' ' && toggle(i)}
-            >
-              <span style={css.lineNum}>{i + 1}</span>
-              <span style={{ flex: 1, fontSize: '1.05rem', lineHeight: 1.7, fontFamily: revealed ? 'inherit' : 'monospace', letterSpacing: revealed ? 'normal' : '0.05em' }}>
-                {revealed ? line : getFirstLetters(line)}
-              </span>
-            </div>
-          )
-        })}
-      </div>
-      <NavButtons onNext={onNext} />
-    </Step>
-  )
-}
-
-function SpeakItStep({ lines, isRtl, onComplete, onUpdate: _onUpdate, savedText: _savedText }: {
-  lines: string[]; isRtl: boolean; onComplete: () => void; onUpdate: (p: Partial<SavedText>) => void; savedText: SavedText
-}) {
-  const chunks = chunkArray(lines, 3)
-  const [currentChunk, setCurrentChunk] = useState(0)
-  const [phase, setPhase] = useState<'show' | 'hidden'>('show')
-  const [countdown, setCountdown] = useState(3)
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  const chunk = chunks[currentChunk]
-  const isLast = currentChunk === chunks.length - 1
-
-  useEffect(() => {
-    if (phase === 'show') {
-      setCountdown(3)
-      timerRef.current = setInterval(() => {
-        setCountdown(c => {
-          if (c <= 1) {
-            if (timerRef.current) clearInterval(timerRef.current)
-            setPhase('hidden')
-            return 0
-          }
-          return c - 1
-        })
-      }, 1000)
-    }
-    return () => { if (timerRef.current) clearInterval(timerRef.current) }
-  }, [phase, currentChunk])
-
-  const nextChunk = () => {
-    if (isLast) {
-      onComplete()
-    } else {
-      setCurrentChunk(c => c + 1)
-      setPhase('show')
-    }
-  }
-
-  return (
-    <Step title="Speak It" subtitle={`Chunk ${currentChunk + 1} of ${chunks.length}. Watch, then recite from memory.`}>
-      <div style={{ ...css.card, minHeight: 200 }}>
-        {phase === 'show' ? (
-          <div>
-            <div style={{ textAlign: 'center', color: 'var(--accent)', fontWeight: 600, marginBottom: 12, fontSize: '0.85rem' }}>
-              Memorize — hiding in {countdown}s
-            </div>
-            {chunk.map((line, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'flex-start', padding: '8px 12px', direction: isRtl ? 'rtl' : 'ltr' }}>
-                <span style={css.lineNum}>{currentChunk * 3 + i + 1}</span>
-                <span style={{ flex: 1, fontSize: '1.05rem', lineHeight: 1.7 }}>{line}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div style={{ textAlign: 'center', padding: '40px 0' }}>
-            <p style={{ fontSize: '1.1rem', marginBottom: 8 }}>Now recite chunk {currentChunk + 1} from memory.</p>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: 20 }}>Tap to reveal and check yourself.</p>
-            {chunk.map((line, i) => (
-              <RevealLine key={i} lineNum={currentChunk * 3 + i + 1} text={line} />
-            ))}
-          </div>
-        )}
-      </div>
-      {phase === 'hidden' && (
-        <NavButtons onNext={nextChunk} nextLabel={isLast ? 'Complete Day 2' : 'Next Chunk'} />
-      )}
-    </Step>
-  )
-}
-
-// ─── Day 3 Steps ─────────────────────────────────────────────────────────────
-
-function FullRecallStep({ lines, isRtl, onNext }: { lines: string[]; isRtl: boolean; onNext: () => void }) {
-  return (
-    <Step title="Full Recall" subtitle="The entire text is hidden. Try to recite everything from memory. Tap each line to check.">
-      <div style={{ ...css.card, marginBottom: 16 }}>
-        {lines.map((line, i) => (
-          <div key={i} style={{ direction: isRtl ? 'rtl' : 'ltr' }}>
-            <RevealLine lineNum={i + 1} text={line} />
-          </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 600 }}>Hints:</span>
+        {([['firstletter','1st Letter'],['wordcount','# Chars'],['none','None']] as const).map(([id, label]) => (
+          <button key={id} onClick={() => setHintType(id)} style={{
+            padding: '3px 10px', borderRadius: 14, fontSize: 11, fontWeight: 600,
+            background: hintType === id ? 'var(--green-faded)' : 'var(--surface-alt)',
+            color: hintType === id ? 'var(--green-dark)' : 'var(--text-secondary)',
+            border: `1px solid ${hintType === id ? 'var(--green-mid)' : 'var(--border)'}`,
+          }}>{label}</button>
         ))}
+        <button onClick={regenerate} style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--pink)', fontWeight: 600 }}>{'\u21BB'} Reshuffle</button>
       </div>
-      <NavButtons onNext={onNext} />
-    </Step>
-  )
-}
-
-function RSVPStep({ lines, onNext }: { lines: string[]; onNext: () => void }) {
-  const words = lines.join(' ').split(/\s+/)
-  const [running, setRunning] = useState(false)
-  const [wordIndex, setWordIndex] = useState(0)
-  const [speed, setSpeed] = useState(300) // ms per word
-  const [done, setDone] = useState(false)
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  const start = () => {
-    setWordIndex(0)
-    setDone(false)
-    setRunning(true)
-  }
-
-  const stop = () => {
-    setRunning(false)
-    if (timerRef.current) clearInterval(timerRef.current)
-  }
-
-  useEffect(() => {
-    if (!running) return
-    timerRef.current = setInterval(() => {
-      setWordIndex(i => {
-        if (i >= words.length - 1) {
-          setRunning(false)
-          setDone(true)
-          return i
-        }
-        return i + 1
-      })
-    }, speed)
-    return () => { if (timerRef.current) clearInterval(timerRef.current) }
-  }, [running, speed, words.length])
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === ' ' && !e.target || (e.target instanceof HTMLElement && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA')) {
-        e.preventDefault()
-        running ? stop() : start()
-      }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  })
-
-  return (
-    <Step title="Speed Round" subtitle="Words flash one at a time. Test your recognition speed.">
-      <div style={{ ...css.card, textAlign: 'center', minHeight: 200, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-        {!running && !done && (
-          <div>
-            <div style={{ marginBottom: 16 }}>
-              <label style={{ ...css.label, textAlign: 'center' }}>Speed (ms per word)</label>
-              <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-                {[500, 300, 200, 100].map(s => (
-                  <button
-                    key={s}
-                    onClick={() => setSpeed(s)}
+      {/* Text with blanks */}
+      <div style={{ lineHeight: 2.4 }}>
+        {lines.map((l, li) => (
+          <div key={li} style={{ marginBottom: 6 }}>
+            {l.speaker && <span style={{ fontWeight: 700, color: 'var(--green-main)', marginRight: 6, fontSize: 12 }}>{l.speaker}:</span>}
+            {l.text.split(/\s+/).map((w, wi) => {
+              const key = `${li}-${wi}`
+              if (!blanked.has(key)) return <span key={key}>{w} </span>
+              const clean = w.replace(/[^a-zA-Z']/g,'')
+              const val = answers[key] || ''
+              const ok = checked && correct(key)
+              const wrong = checked && !correct(key)
+              return (
+                <span key={key} style={{ display: 'inline-block', marginRight: 3 }}>
+                  <input
+                    ref={el => { inputRefs.current[key] = el }}
+                    value={val} onChange={e => setAnswers(p => ({ ...p, [key]: e.target.value }))}
+                    onKeyDown={e => { if (e.key === 'Tab' || e.key === 'Enter') { e.preventDefault(); focusNext(key) } }}
+                    disabled={checked} placeholder={getHint(w)}
+                    className="fill-blank-input"
                     style={{
-                      ...css.btn,
-                      ...css.btnSmall,
-                      ...(speed === s ? css.btnPrimary : css.btnSecondary),
+                      width: Math.max(50, clean.length * 9 + 12), padding: '2px 5px', fontSize: 13,
+                      borderRadius: 4, textAlign: 'center', minHeight: 'auto', minWidth: 'auto',
+                      background: ok ? 'var(--green-faded)' : wrong ? 'var(--incorrect-faded)' : 'var(--surface-alt)',
+                      borderColor: ok ? 'var(--green-mid)' : wrong ? 'var(--incorrect)' : 'var(--border)',
                     }}
-                  >
-                    {s}ms
-                  </button>
-                ))}
-              </div>
-            </div>
-            <button onClick={start} style={{ ...css.btn, ...css.btnPrimary }}>
-              Start (or Space)
-            </button>
+                  />
+                  {wrong && <span style={{ fontSize: 10, color: 'var(--pink)', display: 'block' }}>{w}</span>}
+                </span>
+              )
+            })}
           </div>
-        )}
-        {running && (
-          <div>
-            <div style={{ fontSize: '2.5rem', fontWeight: 700, minHeight: 60 }}>
-              {words[wordIndex]}
-            </div>
-            <ProgressBar value={(wordIndex / words.length) * 100} />
-            <button onClick={stop} style={{ ...css.btn, ...css.btnSmall, ...css.btnSecondary, marginTop: 16 }}>
-              Pause
-            </button>
-          </div>
-        )}
-        {done && (
-          <div>
-            <div style={{ fontSize: '1.5rem', marginBottom: 16 }}>Complete!</div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-              <button onClick={start} style={{ ...css.btn, ...css.btnSecondary }}>Again</button>
-              <button onClick={onNext} style={{ ...css.btn, ...css.btnPrimary }}>Next Step</button>
-            </div>
-          </div>
+        ))}
+      </div>
+      {/* Check / Score */}
+      <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center' }}>
+        {!checked ? (
+          <button onClick={() => setChecked(true)} style={{
+            padding: '8px 22px', borderRadius: 'var(--radius-sm)',
+            background: 'var(--green-main)', color: '#fff', fontWeight: 700, fontSize: 13,
+          }}>Check</button>
+        ) : (
+          <>
+            <span style={{ fontSize: 14, fontWeight: 700, color: score/blankKeys.length >= 0.8 ? 'var(--green-main)' : 'var(--pink)' }}>
+              {score}/{blankKeys.length} ({Math.round(score/blankKeys.length*100)}%)
+            </span>
+            <button onClick={regenerate} style={{
+              padding: '8px 18px', borderRadius: 'var(--radius-sm)',
+              background: 'var(--surface-alt)', border: '1px solid var(--border)',
+              fontSize: 13, fontWeight: 600, marginLeft: 'auto',
+            }}>Try Again</button>
+          </>
         )}
       </div>
-    </Step>
+    </div>
   )
 }
 
-function FinalTestStep({ lines, isRtl, onComplete, onUpdate, savedText }: {
-  lines: string[]; isRtl: boolean; onComplete: () => void; onUpdate: (p: Partial<SavedText>) => void; savedText: SavedText
-}) {
-  const [phase, setPhase] = useState<'recite' | 'rate'>('recite')
-  const [ratings, setRatings] = useState<Record<number, 'perfect' | 'close' | 'missed'>>({})
+/* ═══════════════════════════════════════════════════════════════════════════
+   FIRST LETTER
+   ═══════════════════════════════════════════════════════════════════════════ */
 
-  const allRated = lines.every((_, i) => ratings[i] !== undefined)
+function FirstLetterTool({ lines }: { lines: { speaker: string; text: string }[] }) {
+  const [revealed, setRevealed] = useState<Set<number>>(new Set())
+  const fl = (t: string) => t.split(/\s+/).map(w => w[0] + '\u00B7'.repeat(w.length-1)).join(' ')
+  return (
+    <div>
+      <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>Tap a line to reveal. Try to recall first.</p>
+      {lines.map((l, i) => {
+        const show = revealed.has(i)
+        return (
+          <div key={i} onClick={() => setRevealed(p => { const n = new Set(p); n.has(i) ? n.delete(i) : n.add(i); return n })} style={{
+            marginBottom: 6, padding: '7px 10px', borderRadius: 'var(--radius-sm)',
+            background: show ? 'var(--fl-revealed-bg, var(--green-faded))' : 'var(--surface-alt)',
+            cursor: 'pointer', lineHeight: 1.7, transition: 'background 0.15s',
+            borderLeft: `3px solid ${show ? 'var(--green-main)' : 'transparent'}`,
+          }}>
+            {l.speaker && <span style={{ fontWeight: 700, color: 'var(--green-main)', marginRight: 6, fontSize: 12 }}>{l.speaker}:</span>}
+            <span className={show ? '' : 'fl-unrevealed'} style={{
+              fontFamily: show ? 'inherit' : 'monospace',
+              letterSpacing: show ? 'normal' : 0.5,
+              color: show ? 'var(--text)' : 'var(--fl-text, var(--text))',
+            }}>
+              {show ? l.text : fl(l.text)}
+            </span>
+          </div>
+        )
+      })}
+      <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-dim)' }}>{revealed.size}/{lines.length} revealed</div>
+    </div>
+  )
+}
 
-  const handleComplete = () => {
-    onUpdate({ lineMastery: { ...savedText.lineMastery, ...ratings } })
-    onComplete()
-  }
+/* ═══════════════════════════════════════════════════════════════════════════
+   RSVP
+   ═══════════════════════════════════════════════════════════════════════════ */
 
-  if (phase === 'recite') {
-    return (
-      <Step title="Final Test" subtitle="Recite the entire text from memory. When ready, reveal and rate yourself.">
-        <div style={{ ...css.card, textAlign: 'center', padding: '48px 24px', marginBottom: 16 }}>
-          <p style={{ fontSize: '1.2rem', marginBottom: 8 }}>Close your eyes and recite.</p>
-          <p style={{ color: 'var(--text-muted)', marginBottom: 24 }}>When you're done, reveal the text and rate each line.</p>
-          <button onClick={() => setPhase('rate')} style={{ ...css.btn, ...css.btnPrimary }}>
-            Reveal & Rate
-          </button>
-        </div>
-      </Step>
-    )
-  }
+function RSVPTool({ lines }: { lines: { speaker: string; text: string }[] }) {
+  const WPM_PRESETS = [100, 200, 300, 450, 600]
+  const words = useMemo(() => {
+    const r: { text: string; isSpeaker: boolean }[] = []
+    lines.forEach(l => {
+      if (l.speaker) r.push({ text: `${l.speaker}:`, isSpeaker: true })
+      l.text.split(/\s+/).forEach(w => r.push({ text: w, isSpeaker: false }))
+    })
+    return r
+  }, [lines])
+
+  const [wpm, setWpm] = useState(250)
+  const [idx, setIdx] = useState(0)
+  const [playing, setPlaying] = useState(false)
+  const timerRef = useRef<number|null>(null)
+  const textRef = useRef<HTMLDivElement>(null)
+
+  const ms = Math.round(60000 / wpm)
+  const cur = words[idx] || { text: '\u2014', isSpeaker: false }
+  const findORP = (w: string) => { const l = w.length; if (l<=1) return 0; if (l<=3) return 1; if (l<=5) return 2; return Math.floor(l*0.4) }
+  const orp = findORP(cur.text)
+  const progress = words.length > 1 ? (idx / (words.length - 1)) * 100 : 0
+  const remaining = Math.round((words.length - idx) / wpm * 60)
+
+  useEffect(() => {
+    if (playing && idx < words.length) {
+      const delay = cur.isSpeaker ? ms * 3 : /[.!?;—]$/.test(cur.text) ? ms * 2 : ms
+      timerRef.current = window.setTimeout(() => setIdx(i => { if (i+1 >= words.length) { setPlaying(false); return i } return i+1 }), delay)
+    }
+    return () => { if (timerRef.current) clearTimeout(timerRef.current) }
+  }, [playing, idx, ms, cur, words.length])
+
+  useEffect(() => {
+    textRef.current?.querySelector(`[data-wi="${idx}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [idx])
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement).tagName === 'INPUT') return
+      if (e.code === 'Space') { e.preventDefault(); setPlaying(p => !p) }
+    }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [])
 
   return (
-    <Step title="Rate Your Recall" subtitle="How did you do on each line?">
-      <div style={{ ...css.card, marginBottom: 16 }}>
-        {lines.map((line, i) => {
-          const rating = ratings[i]
-          return (
-            <div key={i} style={{ padding: '12px', borderBottom: i < lines.length - 1 ? '1px solid var(--border)' : 'none' }}>
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 8, direction: isRtl ? 'rtl' : 'ltr' }}>
-                <span style={css.lineNum}>{i + 1}</span>
-                <span style={{ flex: 1, fontSize: '1rem', lineHeight: 1.7 }}>{line}</span>
-              </div>
-              <div style={{ display: 'flex', gap: 6, paddingLeft: 40 }}>
-                {(['perfect', 'close', 'missed'] as const).map(r => {
-                  const active = rating === r
-                  const color = r === 'perfect' ? 'var(--success)' : r === 'close' ? 'var(--yellow)' : 'var(--error)'
-                  const bg = r === 'perfect' ? 'var(--success-dim)' : r === 'close' ? 'var(--yellow-dim)' : 'var(--error-dim)'
-                  return (
-                    <button
-                      key={r}
-                      onClick={() => setRatings(prev => ({ ...prev, [i]: r }))}
-                      style={{
-                        ...css.btn,
-                        ...css.btnSmall,
-                        fontSize: '0.75rem',
-                        background: active ? bg : 'transparent',
-                        color: active ? color : 'var(--text-muted)',
-                        border: `1px solid ${active ? color : 'var(--border)'}`,
-                        textTransform: 'capitalize',
-                      }}
-                    >
-                      {r}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          )
-        })}
+    <div>
+      {/* WPM control */}
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 600 }}>WPM:</span>
+        <input type="range" min={60} max={900} step={10} value={wpm} onChange={e => setWpm(Number(e.target.value))}
+          style={{ width: 100, accentColor: 'var(--pink)', minHeight: 'auto', minWidth: 'auto', padding: 0, border: 'none', background: 'transparent' }} />
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--pink)', minWidth: 40 }}>{wpm}</span>
+        <div style={{ display: 'flex', gap: 4, marginLeft: 8 }}>
+          {WPM_PRESETS.map(w => (
+            <button key={w} onClick={() => setWpm(w)} style={{
+              padding: '2px 8px', borderRadius: 10, fontSize: 10, fontWeight: 600,
+              background: wpm === w ? 'var(--pink-faded)' : 'var(--surface-alt)',
+              color: wpm === w ? 'var(--pink-dark)' : 'var(--text-dim)',
+              border: `1px solid ${wpm === w ? 'var(--pink)' : 'var(--border)'}`,
+            }}>{w}</button>
+          ))}
+        </div>
       </div>
-      <NavButtons
-        onNext={allRated ? handleComplete : undefined}
-        nextLabel="See Results"
-      />
-      {!allRated && (
-        <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: 8 }}>
-          Rate every line to continue
-        </p>
-      )}
-    </Step>
+
+      {/* ORP display */}
+      <div style={{
+        background: 'var(--surface-alt)', border: '3px solid var(--green-main)',
+        borderRadius: 14, padding: '36px 16px', minHeight: 120,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        position: 'relative', marginBottom: 10,
+      }}>
+        <div style={{ position: 'absolute', left: '40%', top: 0, bottom: 0, width: 1, background: 'var(--pink)', opacity: 0.2 }} />
+        <div style={{ display: 'flex', alignItems: 'baseline' }}>
+          <span style={{ fontFamily: 'monospace', fontSize: 36, fontWeight: 700, textAlign: 'right', minWidth: 90, color: 'var(--green-dark)' }}>{cur.text.slice(0, orp)}</span>
+          <span style={{ fontFamily: 'monospace', fontSize: 36, fontWeight: 900, color: 'var(--pink)' }}>{cur.text[orp] || ''}</span>
+          <span style={{ fontFamily: 'monospace', fontSize: 36, fontWeight: 700, textAlign: 'left', minWidth: 90, color: 'var(--green-dark)' }}>{cur.text.slice(orp + 1)}</span>
+        </div>
+      </div>
+
+      {/* Controls */}
+      <div style={{ display: 'flex', gap: 6, justifyContent: 'center', marginBottom: 8 }}>
+        <button onClick={() => setIdx(Math.max(0, idx-1))} style={{ width: 36, height: 36, borderRadius: 'var(--radius-sm)', background: 'var(--surface-alt)', fontSize: 14 }}>{'\u25C0'}</button>
+        <button onClick={() => { if (playing) setPlaying(false); else { if (idx >= words.length-1) setIdx(0); setPlaying(true) } }}
+          style={{ width: 50, height: 36, borderRadius: 'var(--radius-sm)', color: '#fff', fontSize: 14, fontWeight: 700,
+            background: playing ? 'var(--pink)' : 'var(--green-main)' }}>
+          {playing ? '\u23F8' : '\u25B6'}
+        </button>
+        <button onClick={() => { setPlaying(false); setIdx(0) }} style={{ width: 36, height: 36, borderRadius: 'var(--radius-sm)', background: 'var(--surface-alt)', fontSize: 14 }}>{'\u21BB'}</button>
+        <button onClick={() => setIdx(Math.min(words.length-1, idx+1))} style={{ width: 36, height: 36, borderRadius: 'var(--radius-sm)', background: 'var(--surface-alt)', fontSize: 14 }}>{'\u25B6'}</button>
+      </div>
+
+      {/* Progress bar */}
+      <div style={{ height: 4, background: 'var(--border)', borderRadius: 2, marginBottom: 4 }}>
+        <div style={{ width: `${progress}%`, height: '100%', background: 'var(--green-main)', borderRadius: 2, transition: 'width 0.1s' }} />
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-dim)', marginBottom: 10 }}>
+        <span>{Math.round(progress)}%</span>
+        <span>{Math.floor(remaining/60)}:{(remaining%60).toString().padStart(2,'0')} remaining</span>
+      </div>
+
+      {/* Text view with current word highlighted */}
+      <div ref={textRef} style={{
+        padding: 12, background: 'var(--surface-alt)', borderRadius: 'var(--radius)',
+        maxHeight: 180, overflowY: 'auto', lineHeight: 2, fontSize: 12,
+      }}>
+        {words.map((w, i) => (
+          <span key={i} data-wi={i} onClick={() => { setIdx(i); setPlaying(false) }} style={{
+            cursor: 'pointer', padding: '1px 2px', borderRadius: 3, transition: 'all 0.1s',
+            color: i < idx ? 'var(--rsvp-past, var(--text-dim))' : i === idx ? '#fff' : 'var(--text)',
+            background: i === idx ? 'var(--pink)' : 'transparent',
+            fontWeight: w.isSpeaker ? 700 : 400,
+          }}>{w.text} </span>
+        ))}
+      </div>
+    </div>
   )
 }
