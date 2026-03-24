@@ -14,7 +14,7 @@ interface Skit {
 }
 interface SkitProgress { chunkMastery: Record<number, number> }
 type Tool = 'read' | 'fill' | 'firstletter' | 'rsvp'
-type View = 'library' | 'import' | 'practice'
+type View = 'library' | 'import' | 'edit' | 'practice'
 
 /* ═══════════════════════════════════════════════════════════════════════════
    SEED SKITS
@@ -478,6 +478,14 @@ export default function App() {
     setLibrary(prev => prev.filter(s => s.id !== id))
   }, [])
   const addSkit = useCallback((skit: Skit) => { setLibrary(prev => [...prev, skit]); openSkit(skit) }, [openSkit])
+  const [editingSkit, setEditingSkit] = useState<Skit | null>(null)
+  const editSkit = useCallback((skit: Skit) => { setEditingSkit(skit); setView('edit') }, [])
+  const saveEdit = useCallback((updated: Skit) => {
+    setLibrary(prev => prev.map(s => s.id === updated.id ? updated : s))
+    if (activeSkit?.id === updated.id) setActiveSkit(updated)
+    setEditingSkit(null)
+    setView('library')
+  }, [activeSkit])
 
   const shareSkit = useCallback((skit: Skit) => {
     const encoded = encodeSkitForShare(skit)
@@ -512,8 +520,8 @@ export default function App() {
           background: 'var(--surface-alt)', fontSize: 16, display: 'flex',
           alignItems: 'center', justifyContent: 'center',
         }}>{dark ? '\u2600\uFE0F' : '\u{1F319}'}</button>
-        {view === 'practice' && (
-          <button onClick={() => setView('library')} style={{
+        {(view === 'practice' || view === 'edit') && (
+          <button onClick={() => { setEditingSkit(null); setView('library') }} style={{
             padding: '6px 14px', borderRadius: 'var(--radius-sm)',
             background: 'var(--green-faded)', color: 'var(--green-dark)',
             fontSize: 13, fontWeight: 600,
@@ -526,13 +534,19 @@ export default function App() {
           {view === 'library' && (
             <motion.div key="lib" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               style={{ maxWidth: 640, margin: '0 auto', padding: 20 }}>
-              <LibraryView library={library} onOpen={openSkit} onDelete={deleteSkit} onImport={() => setView('import')} onShare={shareSkit} />
+              <LibraryView library={library} onOpen={openSkit} onDelete={deleteSkit} onEdit={editSkit} onImport={() => setView('import')} onShare={shareSkit} />
             </motion.div>
           )}
           {view === 'import' && (
             <motion.div key="imp" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               style={{ maxWidth: 640, margin: '0 auto', padding: 20 }}>
               <ImportView onAdd={addSkit} onCancel={() => setView('library')} />
+            </motion.div>
+          )}
+          {view === 'edit' && editingSkit && (
+            <motion.div key="edit" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              style={{ maxWidth: 640, margin: '0 auto', padding: 20 }}>
+              <EditView skit={editingSkit} onSave={saveEdit} onCancel={() => { setEditingSkit(null); setView('library') }} />
             </motion.div>
           )}
           {view === 'practice' && activeSkit && (
@@ -557,8 +571,8 @@ export default function App() {
    LIBRARY
    ═══════════════════════════════════════════════════════════════════════════ */
 
-function LibraryView({ library, onOpen, onDelete, onImport, onShare }: {
-  library: Skit[]; onOpen: (s: Skit) => void; onDelete: (id: string) => void; onImport: () => void; onShare: (s: Skit) => void
+function LibraryView({ library, onOpen, onDelete, onEdit, onImport, onShare }: {
+  library: Skit[]; onOpen: (s: Skit) => void; onDelete: (id: string) => void; onEdit: (s: Skit) => void; onImport: () => void; onShare: (s: Skit) => void
 }) {
   return (
     <>
@@ -591,12 +605,18 @@ function LibraryView({ library, onOpen, onDelete, onImport, onShare }: {
                   fontSize: 12, color: 'var(--text-secondary)', padding: '4px 8px', borderRadius: 4,
                   background: 'var(--surface-alt)', border: '1px solid var(--border)',
                   fontWeight: 500,
-                }}>{'\u{1F517}'} Share</button>
+                }}>🔗 Share</button>
+                <button onClick={e => { e.stopPropagation(); onEdit(skit) }} title="Edit" style={{
+                  fontSize: 12, color: 'var(--text-secondary)', padding: '4px 8px', borderRadius: 4,
+                  background: 'var(--surface-alt)', border: '1px solid var(--border)',
+                  fontWeight: 500,
+                }}>✏️ Edit</button>
                 {!SEED_SKITS.some(s => s.id === skit.id) && (
-                  <button onClick={e => { e.stopPropagation(); onDelete(skit.id) }} style={{
-                    fontSize: 11, color: 'var(--text-dim)', padding: '4px 8px', borderRadius: 4,
-                    background: 'var(--surface-alt)', border: '1px solid var(--border)',
-                  }}>{'\u2715'}</button>
+                  <button onClick={e => { e.stopPropagation(); onDelete(skit.id) }} title="Delete" style={{
+                    fontSize: 11, color: '#dc2626', padding: '4px 8px', borderRadius: 4,
+                    background: 'rgba(220,38,38,0.08)', border: '1px solid rgba(220,38,38,0.3)',
+                    fontWeight: 600,
+                  }}>✕</button>
                 )}
               </div>
             </div>
@@ -641,6 +661,55 @@ function ImportView({ onAdd, onCancel }: { onAdd: (s: Skit) => void; onCancel: (
         color: ok ? '#fff' : 'var(--text-dim)', fontSize: 15, fontWeight: 700,
         cursor: ok ? 'pointer' : 'not-allowed',
       }}>Start Practicing</button>
+    </>
+  )
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   EDIT VIEW
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function EditView({ skit, onSave, onCancel }: { skit: Skit; onSave: (s: Skit) => void; onCancel: () => void }) {
+  const [title, setTitle] = useState(skit.title)
+  const [rawText, setRawText] = useState(
+    skit.chunks.map(c => c.lines.map(l => l.speaker ? `${l.speaker}: ${l.text}` : l.text).join('\n')).join('\n\n')
+  )
+  const ok = title.trim() && rawText.trim()
+  const handleSave = () => {
+    if (!ok) return
+    const updated = parseSkit(rawText, title.trim())
+    updated.id = skit.id // preserve original ID so progress is kept
+    updated.createdAt = skit.createdAt
+    onSave(updated)
+  }
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <h2 style={{ fontWeight: 800, fontSize: 20, color: 'var(--green-dark)' }}>Edit Text</h2>
+        <button onClick={onCancel} style={{ padding: '5px 14px', borderRadius: 'var(--radius-sm)', background: 'var(--surface-alt)', fontSize: 13, fontWeight: 500 }}>Cancel</button>
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4, color: 'var(--text-secondary)' }}>Title</label>
+        <input value={title} onChange={e => setTitle(e.target.value)} />
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4, color: 'var(--text-secondary)' }}>
+          Text <span style={{ fontWeight: 400, color: 'var(--text-dim)' }}>(blank lines = sections, SPEAKER: text = dialogue)</span>
+        </label>
+        <textarea value={rawText} onChange={e => setRawText(e.target.value)} style={{ minHeight: 300, fontFamily: 'monospace', fontSize: 13, lineHeight: 1.5 }} />
+      </div>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <button onClick={onCancel} style={{
+          flex: 1, padding: 13, borderRadius: 'var(--radius)',
+          background: 'var(--surface-alt)', fontSize: 15, fontWeight: 600,
+        }}>Cancel</button>
+        <button onClick={handleSave} disabled={!ok} style={{
+          flex: 2, padding: 13, borderRadius: 'var(--radius)',
+          background: ok ? 'var(--green-main)' : 'var(--border)',
+          color: ok ? '#fff' : 'var(--text-dim)', fontSize: 15, fontWeight: 700,
+          cursor: ok ? 'pointer' : 'not-allowed',
+        }}>Save Changes</button>
+      </div>
     </>
   )
 }
