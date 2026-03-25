@@ -1,5 +1,14 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js'
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SUPABASE
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const SUPA_URL = import.meta.env.VITE_SUPABASE_URL || ''
+const SUPA_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || ''
+const supabase: SupabaseClient | null = SUPA_URL && SUPA_KEY ? createClient(SUPA_URL, SUPA_KEY) : null
 
 /* ═══════════════════════════════════════════════════════════════════════════
    TYPES
@@ -443,6 +452,125 @@ export default function App() {
   const [dark, setDark] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
 
+  // === AUTH STATE ===
+  const [user, setUser] = useState<User | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [showAuth, setShowAuth] = useState(false)
+  const [authEmail, setAuthEmail] = useState('')
+  const [authPass, setAuthPass] = useState('')
+  const [authName, setAuthName] = useState('')
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin')
+  const [authError, setAuthError] = useState('')
+  const [syncing, setSyncing] = useState(false)
+
+  // Check session on mount
+  useEffect(() => {
+    if (!supabase) { setAuthLoading(false); return }
+    supabase.auth.getSession().then(({ data }) => {
+      setUser(data.session?.user ?? null)
+      setAuthLoading(false)
+    })
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null)
+    })
+    return () => listener.subscription.unsubscribe()
+  }, [])
+
+  // Sync from cloud on login
+  useEffect(() => {
+    if (user && supabase) syncFromCloud()
+  }, [user])
+
+  const handleAuth = async () => {
+    if (!supabase) return
+    setAuthError('')
+    try {
+      if (authMode === 'signup') {
+        const { error } = await supabase.auth.signUp({
+          email: authEmail, password: authPass,
+          options: { data: { display_name: authName || authEmail.split('@')[0] } }
+        })
+        if (error) throw error
+        setToast('Check your email to confirm your account')
+        setShowAuth(false)
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email: authEmail, password: authPass })
+        if (error) throw error
+        setShowAuth(false)
+        setToast('Signed in!')
+      }
+    } catch (e: any) { setAuthError(e.message || 'Auth failed') }
+  }
+
+  const signOut = async () => {
+    if (!supabase) return
+    await supabase.auth.signOut()
+    setUser(null)
+    setToast('Signed out')
+  }
+
+  // === CLOUD SYNC ===
+  const syncToCloud = async () => {
+    if (!supabase || !user) return
+    setSyncing(true)
+    try {
+      const userSkits = library.filter(s => !SEED_SKITS.some(seed => seed.id === s.id))
+      for (const skit of userSkits) {
+        await supabase.from('skits').upsert({
+          id: skit.id, user_id: user.id, title: skit.title, subtitle: skit.subtitle,
+          speakers: skit.speakers, chunks: skit.chunks, macro_sections: skit.macroSections,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'id' })
+      }
+      // Sync progress
+      for (const skit of library) {
+        const progress = loadProgress(skit.id)
+        if (Object.keys(progress.chunkMastery).length > 0) {
+          await supabase.from('progress').upsert({
+            user_id: user.id, skit_id: skit.id,
+            chunk_mastery: progress.chunkMastery,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'user_id,skit_id' })
+        }
+      }
+      setToast('Synced to cloud!')
+    } catch (e: any) { setToast('Sync failed: ' + (e.message || '')) }
+    setSyncing(false)
+  }
+
+  const syncFromCloud = async () => {
+    if (!supabase || !user) return
+    setSyncing(true)
+    try {
+      const { data: cloudSkits } = await supabase.from('skits').select('*').eq('user_id', user.id)
+      if (cloudSkits && cloudSkits.length > 0) {
+        setLibrary(prev => {
+          const merged = [...prev]
+          for (const cs of cloudSkits) {
+            if (!merged.some(s => s.id === cs.id)) {
+              merged.push({
+                id: cs.id, title: cs.title, subtitle: cs.subtitle || '',
+                speakers: cs.speakers || [''], chunks: cs.chunks,
+                macroSections: cs.macro_sections || [], createdAt: cs.created_at,
+              })
+            }
+          }
+          return merged
+        })
+      }
+      // Sync progress
+      const { data: cloudProgress } = await supabase.from('progress').select('*').eq('user_id', user.id)
+      if (cloudProgress) {
+        for (const cp of cloudProgress) {
+          const local = loadProgress(cp.skit_id)
+          const merged = { chunkMastery: { ...local.chunkMastery, ...cp.chunk_mastery } }
+          saveProgress(cp.skit_id, merged)
+        }
+      }
+    } catch { /* silent fail — localStorage still works */ }
+    setSyncing(false)
+  }
+
   useEffect(() => { saveLibrary(library) }, [library])
   useEffect(() => { document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light') }, [dark])
 
@@ -515,19 +643,85 @@ export default function App() {
         <span style={{ fontSize: 22 }}>{'\u{1F3AD}'}</span>
         <span style={{ fontWeight: 800, fontSize: 17, color: 'var(--green-dark)' }}>Skit Trainer</span>
         <div style={{ flex: 1 }} />
+        {supabase && !authLoading && (
+          user ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button onClick={syncToCloud} disabled={syncing} title="Sync to cloud" style={{
+                padding: '4px 10px', borderRadius: 'var(--radius-sm)', fontSize: 12,
+                background: 'var(--surface-alt)', border: '1px solid var(--border)', fontWeight: 500,
+                color: 'var(--text-secondary)',
+              }}>{syncing ? '⏳' : '☁️'} Sync</button>
+              <button onClick={signOut} title="Sign out" style={{
+                padding: '4px 10px', borderRadius: 'var(--radius-sm)', fontSize: 12,
+                background: 'var(--surface-alt)', border: '1px solid var(--border)',
+                color: 'var(--text-dim)',
+              }}>Sign out</button>
+            </div>
+          ) : (
+            <button onClick={() => setShowAuth(true)} style={{
+              padding: '4px 12px', borderRadius: 'var(--radius-sm)', fontSize: 12,
+              background: 'var(--green-faded)', border: '1px solid var(--green-mid)',
+              color: 'var(--green-dark)', fontWeight: 600,
+            }}>Sign in</button>
+          )
+        )}
         <button onClick={() => setDark(!dark)} style={{
           width: 36, height: 36, borderRadius: 'var(--radius-sm)',
           background: 'var(--surface-alt)', fontSize: 16, display: 'flex',
           alignItems: 'center', justifyContent: 'center',
-        }}>{dark ? '\u2600\uFE0F' : '\u{1F319}'}</button>
+        }}>{dark ? '☀️' : '🌙'}</button>
         {(view === 'practice' || view === 'edit') && (
           <button onClick={() => { setEditingSkit(null); setView('library') }} style={{
             padding: '6px 14px', borderRadius: 'var(--radius-sm)',
             background: 'var(--green-faded)', color: 'var(--green-dark)',
             fontSize: 13, fontWeight: 600,
-          }}>{'\u2190'} Library</button>
+          }}>← Library</button>
         )}
       </header>
+
+      {/* Auth Modal */}
+      {showAuth && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        }} onClick={() => setShowAuth(false)}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background: 'var(--surface)', borderRadius: 'var(--radius)', padding: 24,
+            width: '100%', maxWidth: 380, border: '1px solid var(--border)',
+          }}>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--green-dark)', marginBottom: 16 }}>
+              {authMode === 'signin' ? 'Sign In' : 'Create Account'}
+            </h2>
+            {authMode === 'signup' && (
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4, color: 'var(--text-secondary)' }}>Name</label>
+                <input value={authName} onChange={e => setAuthName(e.target.value)} placeholder="Your name" />
+              </div>
+            )}
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4, color: 'var(--text-secondary)' }}>Email</label>
+              <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@email.com" />
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4, color: 'var(--text-secondary)' }}>Password</label>
+              <input type="password" value={authPass} onChange={e => setAuthPass(e.target.value)} placeholder="Min 6 characters"
+                onKeyDown={e => e.key === 'Enter' && handleAuth()} />
+            </div>
+            {authError && <p style={{ color: 'var(--pink)', fontSize: 13, marginBottom: 12 }}>{authError}</p>}
+            <button onClick={handleAuth} style={{
+              width: '100%', padding: 12, borderRadius: 'var(--radius)',
+              background: 'var(--green-main)', color: '#fff', fontSize: 15, fontWeight: 700,
+            }}>{authMode === 'signin' ? 'Sign In' : 'Create Account'}</button>
+            <p style={{ textAlign: 'center', marginTop: 12, fontSize: 13, color: 'var(--text-dim)' }}>
+              {authMode === 'signin' ? "Don't have an account? " : 'Already have an account? '}
+              <button onClick={() => { setAuthMode(authMode === 'signin' ? 'signup' : 'signin'); setAuthError('') }}
+                style={{ color: 'var(--green-main)', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', fontSize: 13 }}>
+                {authMode === 'signin' ? 'Sign up' : 'Sign in'}
+              </button>
+            </p>
+          </div>
+        </div>
+      )}
 
       <main style={{ flex: 1, overflow: 'auto' }}>
         <AnimatePresence mode="wait">
