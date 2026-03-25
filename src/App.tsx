@@ -530,8 +530,26 @@ export default function App() {
           }, { onConflict: 'id' })
         }
       }
-      // Sync progress — merge, never overwrite with less data
+      // Sync progress + guide — merge, never overwrite with less data
       for (const skit of library) {
+        // Guide progress
+        const localGuide = loadGuideProgress(skit.id)
+        if (Object.keys(localGuide).length > 0) {
+          const { data: cloudGuide } = await supabase.from('progress').select('guide_progress').eq('user_id', user.id).eq('skit_id', skit.id).single()
+          const mergedGuide: Record<string, boolean> = { ...(cloudGuide?.guide_progress || {}), ...localGuide }
+          // Keep checked if EITHER side has it checked
+          if (cloudGuide?.guide_progress) {
+            for (const [k, v] of Object.entries(cloudGuide.guide_progress)) {
+              if (v) mergedGuide[k] = true
+            }
+          }
+          await supabase.from('progress').upsert({
+            user_id: user.id, skit_id: skit.id,
+            guide_progress: mergedGuide,
+            updated_at: now,
+          }, { onConflict: 'user_id,skit_id' })
+          saveGuideProgress(skit.id, mergedGuide as Record<number, boolean>)
+        }
         const localProgress = loadProgress(skit.id)
         if (Object.keys(localProgress.chunkMastery).length === 0) continue
         const { data: cloudProg } = await supabase.from('progress').select('chunk_mastery').eq('user_id', user.id).eq('skit_id', skit.id).single()
@@ -586,10 +604,11 @@ export default function App() {
           return merged
         })
       }
-      // Sync progress — merge, keep highest mastery per chunk
+      // Sync progress + guide — merge, keep highest mastery per chunk
       const { data: cloudProgress } = await supabase.from('progress').select('*').eq('user_id', user.id)
       if (cloudProgress) {
         for (const cp of cloudProgress) {
+          // Chunk mastery
           const local = loadProgress(cp.skit_id)
           const merged: Record<number, number> = { ...local.chunkMastery }
           if (cp.chunk_mastery) {
@@ -599,6 +618,15 @@ export default function App() {
             }
           }
           saveProgress(cp.skit_id, { chunkMastery: merged })
+          // Guide progress — keep checked if either side has it
+          if (cp.guide_progress) {
+            const localGuide = loadGuideProgress(cp.skit_id)
+            const mergedGuide: Record<string, boolean> = { ...localGuide }
+            for (const [k, v] of Object.entries(cp.guide_progress)) {
+              if (v) mergedGuide[k] = true
+            }
+            saveGuideProgress(cp.skit_id, mergedGuide as Record<number, boolean>)
+          }
         }
       }
     } catch { /* silent fail — localStorage still works */ }
@@ -955,10 +983,33 @@ const PHASES: { id: number; label: string; icon: string; startStep: number; endS
   { id: 5, label: 'Perform', icon: '🎭', startStep: 13, endStep: 17 },
 ]
 
-function StudyGuide({ onNavigate }: { onNavigate: (tool: Tool) => void }) {
+const GUIDE_STORAGE = 'skit-trainer-guide'
+function loadGuideProgress(skitId: string): Record<number, boolean> {
+  try { const r = localStorage.getItem(`${GUIDE_STORAGE}-${skitId}`); return r ? JSON.parse(r) : {} }
+  catch { return {} }
+}
+function saveGuideProgress(skitId: string, completed: Record<number, boolean>) {
+  localStorage.setItem(`${GUIDE_STORAGE}-${skitId}`, JSON.stringify(completed))
+}
+
+function StudyGuide({ skitId, onNavigate }: { skitId: string; onNavigate: (tool: Tool) => void }) {
   const [open, setOpen] = useState(false)
   const [openPhases, setOpenPhases] = useState<Record<number, boolean>>({ 1: true })
+  const [completed, setCompleted] = useState<Record<number, boolean>>(() => loadGuideProgress(skitId))
   const togglePhase = (id: number) => setOpenPhases(p => ({ ...p, [id]: !p[id] }))
+
+  // Persist on change
+  useEffect(() => { saveGuideProgress(skitId, completed) }, [completed, skitId])
+  // Reset when skit changes
+  useEffect(() => { setCompleted(loadGuideProgress(skitId)) }, [skitId])
+
+  const toggleStep = (step: number) => {
+    setCompleted(prev => ({ ...prev, [step]: !prev[step] }))
+  }
+
+  const totalCompleted = Object.values(completed).filter(Boolean).length
+  const totalSteps = STUDY_STEPS.length
+
   return (
     <div style={{ marginBottom: 14 }}>
       <button onClick={() => setOpen(!open)} style={{
@@ -970,6 +1021,14 @@ function StudyGuide({ onNavigate }: { onNavigate: (tool: Tool) => void }) {
         display: 'flex', alignItems: 'center', gap: 6,
       }}>
         📋 Study Guide
+        {totalCompleted > 0 && (
+          <span style={{
+            fontSize: 11, fontWeight: 700, marginLeft: 4,
+            color: totalCompleted === totalSteps ? '#fff' : 'var(--green-dark)',
+            background: totalCompleted === totalSteps ? 'var(--green-main)' : 'var(--green-faded)',
+            padding: '1px 8px', borderRadius: 10,
+          }}>{totalCompleted}/{totalSteps}</span>
+        )}
         <span style={{ fontSize: 10, marginLeft: 4 }}>{open ? '▲' : '▼'}</span>
       </button>
       <AnimatePresence>
@@ -981,25 +1040,35 @@ function StudyGuide({ onNavigate }: { onNavigate: (tool: Tool) => void }) {
           >
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 10 }}>
               <p style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5, marginBottom: 6 }}>
-                Follow these 17 steps across 5 phases. Alternate between tools at increasing difficulty. Most texts can be memorized in 2–3 sessions.
+                Follow these {totalSteps} steps across 5 phases. Check off each step as you complete it. Progress: {totalCompleted}/{totalSteps}
               </p>
               {PHASES.map(phase => {
                 const phaseSteps = STUDY_STEPS.filter(s => s.step >= phase.startStep && s.step <= phase.endStep)
+                const phaseCompleted = phaseSteps.filter(s => completed[s.step]).length
+                const phaseTotal = phaseSteps.length
+                const phaseComplete = phaseCompleted === phaseTotal
                 const isOpen = !!openPhases[phase.id]
                 return (
                   <div key={phase.id}>
                     <button onClick={() => togglePhase(phase.id)} style={{
                       width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                       padding: '8px 10px', borderRadius: 'var(--radius-sm)',
-                      background: isOpen ? 'var(--green-faded)' : 'transparent',
-                      border: `1px solid ${isOpen ? 'var(--green-mid)' : 'var(--border)'}`,
+                      background: phaseComplete ? 'var(--green-main)' : isOpen ? 'var(--green-faded)' : 'transparent',
+                      border: `1px solid ${phaseComplete ? 'var(--green-main)' : isOpen ? 'var(--green-mid)' : 'var(--border)'}`,
                       marginTop: phase.id > 1 ? 4 : 0, cursor: 'pointer',
+                      transition: 'background 0.2s, border-color 0.2s',
                     }}>
-                      <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--green-dark)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                        {phase.icon} Phase {phase.id}: {phase.label}
+                      <span style={{
+                        fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.04em',
+                        color: phaseComplete ? '#fff' : 'var(--green-dark)',
+                      }}>
+                        {phaseComplete ? '✓' : phase.icon} Phase {phase.id}: {phase.label}
                       </span>
-                      <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>
-                        Steps {phase.startStep}–{phase.endStep} {isOpen ? '▲' : '▼'}
+                      <span style={{
+                        fontSize: 11, fontWeight: 600,
+                        color: phaseComplete ? 'rgba(255,255,255,0.85)' : 'var(--text-dim)',
+                      }}>
+                        {phaseCompleted}/{phaseTotal} {isOpen ? '▲' : '▼'}
                       </span>
                     </button>
                     <AnimatePresence>
@@ -1010,38 +1079,51 @@ function StudyGuide({ onNavigate }: { onNavigate: (tool: Tool) => void }) {
                           style={{ overflow: 'hidden' }}
                         >
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 4 }}>
-                            {phaseSteps.map(s => (
-                              <div key={s.step} style={{
-                                background: 'var(--surface)', border: '1px solid var(--border)',
-                                borderRadius: 'var(--radius)', padding: '10px 12px',
-                                display: 'flex', gap: 10, alignItems: 'flex-start',
-                              }}>
-                                <div style={{
-                                  width: 28, height: 28, borderRadius: '50%',
-                                  background: 'var(--green-faded)', display: 'flex',
-                                  alignItems: 'center', justifyContent: 'center',
-                                  fontSize: 12, fontWeight: 800, flexShrink: 0,
-                                  color: 'var(--green-dark)',
-                                }}>{s.step}</div>
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
-                                    <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text)' }}>
-                                      {s.icon} {s.title} <span style={{ fontSize: 10, opacity: 0.6, marginLeft: 4 }}>{s.difficulty}</span>
-                                    </span>
-                                    <button onClick={() => { onNavigate(s.tool); setOpen(false) }} style={{
-                                      fontSize: 11, fontWeight: 700, color: 'var(--pink)',
-                                      padding: '3px 10px', borderRadius: 12,
-                                      background: 'var(--pink-faded)', border: '1px solid var(--pink-mid)',
-                                      flexShrink: 0, minHeight: 28, minWidth: 28,
-                                    }}>Go →</button>
+                            {phaseSteps.map(s => {
+                              const done = !!completed[s.step]
+                              return (
+                                <div key={s.step} style={{
+                                  background: done ? 'var(--green-faded)' : 'var(--surface)',
+                                  border: `1px solid ${done ? 'var(--green-mid)' : 'var(--border)'}`,
+                                  borderRadius: 'var(--radius)', padding: '10px 12px',
+                                  display: 'flex', gap: 10, alignItems: 'flex-start',
+                                  transition: 'background 0.2s, border-color 0.2s',
+                                }}>
+                                  {/* Checkbox */}
+                                  <button onClick={() => toggleStep(s.step)} style={{
+                                    width: 28, height: 28, borderRadius: 6, flexShrink: 0,
+                                    border: `2px solid ${done ? 'var(--green-main)' : 'var(--border)'}`,
+                                    background: done ? 'var(--green-main)' : 'transparent',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    fontSize: 14, color: '#fff', cursor: 'pointer',
+                                    transition: 'all 0.15s ease',
+                                    minHeight: 28, minWidth: 28,
+                                  }}>{done ? '✓' : ''}</button>
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
+                                      <span style={{
+                                        fontWeight: 700, fontSize: 13,
+                                        color: done ? 'var(--green-dark)' : 'var(--text)',
+                                        textDecoration: done ? 'line-through' : 'none',
+                                        opacity: done ? 0.7 : 1,
+                                      }}>
+                                        {s.icon} {s.title} <span style={{ fontSize: 10, opacity: 0.6, marginLeft: 4 }}>{s.difficulty}</span>
+                                      </span>
+                                      <button onClick={() => { onNavigate(s.tool); setOpen(false) }} style={{
+                                        fontSize: 11, fontWeight: 700, color: 'var(--pink)',
+                                        padding: '3px 10px', borderRadius: 12,
+                                        background: 'var(--pink-faded)', border: '1px solid var(--pink-mid)',
+                                        flexShrink: 0, minHeight: 28, minWidth: 28,
+                                      }}>Go →</button>
+                                    </div>
+                                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 3 }}>{s.description}</p>
+                                    <p style={{ fontSize: 11, color: 'var(--text-dim)', fontStyle: 'italic', lineHeight: 1.4 }}>
+                                      💡 {s.tip} <span style={{ opacity: 0.6 }}>— {s.citation}</span>
+                                    </p>
                                   </div>
-                                  <p style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 3 }}>{s.description}</p>
-                                  <p style={{ fontSize: 11, color: 'var(--text-dim)', fontStyle: 'italic', lineHeight: 1.4 }}>
-                                    💡 {s.tip} <span style={{ opacity: 0.6 }}>— {s.citation}</span>
-                                  </p>
                                 </div>
-                              </div>
-                            ))}
+                              )
+                            })}
                           </div>
                         </motion.div>
                       )}
@@ -1083,7 +1165,7 @@ function PracticeView({ skit, tool, setTool, chunks, lines }: {
       </div>
 
       {/* Study Guide */}
-      <StudyGuide onNavigate={setTool} />
+      <StudyGuide skitId={skit.id} onNavigate={setTool} />
 
       {/* Tool bar */}
       <div className="tool-grid" style={{
