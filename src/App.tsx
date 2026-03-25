@@ -19,7 +19,7 @@ interface Chunk { id: number; label: string; lines: Line[] }
 interface MacroSection { id: string; label: string; chunks: number[] }
 interface Skit {
   id: string; title: string; subtitle: string; speakers: string[]
-  chunks: Chunk[]; macroSections: MacroSection[]; createdAt: string
+  chunks: Chunk[]; macroSections: MacroSection[]; createdAt: string; updatedAt?: string
 }
 interface SkitProgress { chunkMastery: Record<number, number> }
 type Tool = 'read' | 'fill' | 'firstletter' | 'rsvp'
@@ -153,7 +153,7 @@ function parseSkit(raw: string, title: string): Skit {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     title, subtitle: `${chunks.length} sections · ${chunks.reduce((a,c) => a+c.lines.length, 0)} lines · ${wordCount} words`,
     speakers: [...speakers].length ? [...speakers] : [''],
-    chunks, macroSections: macros, createdAt: new Date().toISOString(),
+    chunks, macroSections: macros, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   }
 }
 
@@ -510,30 +510,48 @@ export default function App() {
   }
 
   // === CLOUD SYNC ===
+  // === SMART SYNC: newest wins, never delete, merge progress ===
   const syncToCloud = async () => {
     if (!supabase || !user) return
     setSyncing(true)
     try {
       const userSkits = library.filter(s => !SEED_SKITS.some(seed => seed.id === s.id))
+      const now = new Date().toISOString()
       for (const skit of userSkits) {
-        await supabase.from('skits').upsert({
-          id: skit.id, user_id: user.id, title: skit.title, subtitle: skit.subtitle,
-          speakers: skit.speakers, chunks: skit.chunks, macro_sections: skit.macroSections,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'id' })
-      }
-      // Sync progress
-      for (const skit of library) {
-        const progress = loadProgress(skit.id)
-        if (Object.keys(progress.chunkMastery).length > 0) {
-          await supabase.from('progress').upsert({
-            user_id: user.id, skit_id: skit.id,
-            chunk_mastery: progress.chunkMastery,
-            updated_at: new Date().toISOString(),
-          }, { onConflict: 'user_id,skit_id' })
+        // Check cloud version first
+        const { data: existing } = await supabase.from('skits').select('updated_at').eq('id', skit.id).single()
+        const localUpdated = skit.updatedAt || skit.createdAt || now
+        // Only push if local is newer or doesn't exist in cloud
+        if (!existing || !existing.updated_at || new Date(localUpdated) >= new Date(existing.updated_at)) {
+          await supabase.from('skits').upsert({
+            id: skit.id, user_id: user.id, title: skit.title, subtitle: skit.subtitle,
+            speakers: skit.speakers, chunks: skit.chunks, macro_sections: skit.macroSections,
+            updated_at: now,
+          }, { onConflict: 'id' })
         }
       }
-      setToast('Synced to cloud!')
+      // Sync progress — merge, never overwrite with less data
+      for (const skit of library) {
+        const localProgress = loadProgress(skit.id)
+        if (Object.keys(localProgress.chunkMastery).length === 0) continue
+        const { data: cloudProg } = await supabase.from('progress').select('chunk_mastery').eq('user_id', user.id).eq('skit_id', skit.id).single()
+        // Merge: keep the HIGHER mastery value for each chunk
+        const merged: Record<number, number> = { ...(cloudProg?.chunk_mastery || {}), ...localProgress.chunkMastery }
+        if (cloudProg?.chunk_mastery) {
+          for (const [k, v] of Object.entries(cloudProg.chunk_mastery)) {
+            const key = Number(k)
+            merged[key] = Math.max(merged[key] || 0, v as number)
+          }
+        }
+        await supabase.from('progress').upsert({
+          user_id: user.id, skit_id: skit.id,
+          chunk_mastery: merged,
+          updated_at: now,
+        }, { onConflict: 'user_id,skit_id' })
+        // Also update local with merged version
+        saveProgress(skit.id, { chunkMastery: merged })
+      }
+      setToast('Synced!')
     } catch (e: any) { setToast('Sync failed: ' + (e.message || '')) }
     setSyncing(false)
   }
@@ -547,24 +565,40 @@ export default function App() {
         setLibrary(prev => {
           const merged = [...prev]
           for (const cs of cloudSkits) {
-            if (!merged.some(s => s.id === cs.id)) {
-              merged.push({
-                id: cs.id, title: cs.title, subtitle: cs.subtitle || '',
-                speakers: cs.speakers || [''], chunks: cs.chunks,
-                macroSections: cs.macro_sections || [], createdAt: cs.created_at,
-              })
+            const localIdx = merged.findIndex(s => s.id === cs.id)
+            const cloudSkit: Skit = {
+              id: cs.id, title: cs.title, subtitle: cs.subtitle || '',
+              speakers: cs.speakers || [''], chunks: cs.chunks,
+              macroSections: cs.macro_sections || [], createdAt: cs.created_at,
+            }
+            if (localIdx === -1) {
+              // Cloud-only skit — add it locally
+              merged.push(cloudSkit)
+            } else {
+              // Exists on both — newest wins (by updated_at)
+              const cloudTime = new Date(cs.updated_at || cs.created_at).getTime()
+              const localTime = new Date(merged[localIdx].updatedAt || merged[localIdx].createdAt).getTime()
+              if (cloudTime > localTime) {
+                merged[localIdx] = cloudSkit
+              }
             }
           }
           return merged
         })
       }
-      // Sync progress
+      // Sync progress — merge, keep highest mastery per chunk
       const { data: cloudProgress } = await supabase.from('progress').select('*').eq('user_id', user.id)
       if (cloudProgress) {
         for (const cp of cloudProgress) {
           const local = loadProgress(cp.skit_id)
-          const merged = { chunkMastery: { ...local.chunkMastery, ...cp.chunk_mastery } }
-          saveProgress(cp.skit_id, merged)
+          const merged: Record<number, number> = { ...local.chunkMastery }
+          if (cp.chunk_mastery) {
+            for (const [k, v] of Object.entries(cp.chunk_mastery)) {
+              const key = Number(k)
+              merged[key] = Math.max(merged[key] || 0, v as number)
+            }
+          }
+          saveProgress(cp.skit_id, { chunkMastery: merged })
         }
       }
     } catch { /* silent fail — localStorage still works */ }
@@ -609,6 +643,7 @@ export default function App() {
   const [editingSkit, setEditingSkit] = useState<Skit | null>(null)
   const editSkit = useCallback((skit: Skit) => { setEditingSkit(skit); setView('edit') }, [])
   const saveEdit = useCallback((updated: Skit) => {
+    updated.updatedAt = new Date().toISOString()
     setLibrary(prev => prev.map(s => s.id === updated.id ? updated : s))
     if (activeSkit?.id === updated.id) setActiveSkit(updated)
     setEditingSkit(null)
