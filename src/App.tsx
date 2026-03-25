@@ -828,6 +828,32 @@ export default function App() {
    LIBRARY
    ═══════════════════════════════════════════════════════════════════════════ */
 
+function GuideProgressBadge({ skitId }: { skitId: string }) {
+  const completed = loadGuideProgress(skitId)
+  const total = STUDY_STEPS.length
+  const done = Object.values(completed).filter(Boolean).length
+  // Find current phase
+  let currentPhase = PHASES[0]
+  for (const phase of PHASES) {
+    const phaseSteps = STUDY_STEPS.filter(s => s.step >= phase.startStep && s.step <= phase.endStep)
+    const phaseDone = phaseSteps.filter(s => completed[s.step]).length
+    if (phaseDone < phaseSteps.length) { currentPhase = phase; break }
+    currentPhase = phase
+  }
+  const allDone = done === total
+  return (
+    <span style={{
+      fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 10,
+      background: allDone ? 'var(--green-main)' : done > 0 ? 'var(--green-faded)' : 'var(--surface-alt)',
+      color: allDone ? '#fff' : done > 0 ? 'var(--green-dark)' : 'var(--text-dim)',
+      border: `1px solid ${allDone ? 'var(--green-main)' : done > 0 ? 'var(--green-mid)' : 'var(--border)'}`,
+      whiteSpace: 'nowrap',
+    }}>
+      {allDone ? `✓ ${done}/${total}` : done > 0 ? `Phase ${currentPhase.id}: ${done}/${total}` : `0/${total}`}
+    </span>
+  )
+}
+
 function LibraryView({ library, onOpen, onDelete, onEdit, onImport, onShare }: {
   library: Skit[]; onOpen: (s: Skit) => void; onDelete: (id: string) => void; onEdit: (s: Skit) => void; onImport: () => void; onShare: (s: Skit) => void
 }) {
@@ -877,10 +903,13 @@ function LibraryView({ library, onOpen, onDelete, onEdit, onImport, onShare }: {
                 )}
               </div>
             </div>
-            <div style={{ display: 'flex', gap: 14, marginTop: 6, fontSize: 12, color: 'var(--text-dim)' }}>
-              <span>{skit.chunks.length} sections</span>
-              <span>{skit.chunks.reduce((a,c) => a+c.lines.length, 0)} lines</span>
-              <span>{countWords(skit)} words</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+              <div style={{ display: 'flex', gap: 14, fontSize: 12, color: 'var(--text-dim)' }}>
+                <span>{skit.chunks.length} sections</span>
+                <span>{skit.chunks.reduce((a,c) => a+c.lines.length, 0)} lines</span>
+                <span>{countWords(skit)} words</span>
+              </div>
+              <GuideProgressBadge skitId={skit.id} />
             </div>
           </div>
         ))}
@@ -1021,14 +1050,13 @@ function StudyGuide({ skitId, onNavigate }: { skitId: string; onNavigate: (tool:
         display: 'flex', alignItems: 'center', gap: 6,
       }}>
         📋 Study Guide
-        {totalCompleted > 0 && (
-          <span style={{
+        <span style={{
             fontSize: 11, fontWeight: 700, marginLeft: 4,
-            color: totalCompleted === totalSteps ? '#fff' : 'var(--green-dark)',
-            background: totalCompleted === totalSteps ? 'var(--green-main)' : 'var(--green-faded)',
+            color: totalCompleted === totalSteps ? '#fff' : totalCompleted > 0 ? 'var(--green-dark)' : 'var(--text-dim)',
+            background: totalCompleted === totalSteps ? 'var(--green-main)' : totalCompleted > 0 ? 'var(--green-faded)' : 'var(--surface-alt)',
             padding: '1px 8px', borderRadius: 10,
+            border: `1px solid ${totalCompleted === totalSteps ? 'var(--green-main)' : totalCompleted > 0 ? 'var(--green-mid)' : 'var(--border)'}`,
           }}>{totalCompleted}/{totalSteps}</span>
-        )}
         <span style={{ fontSize: 10, marginLeft: 4 }}>{open ? '▲' : '▼'}</span>
       </button>
       <AnimatePresence>
