@@ -20,6 +20,7 @@ interface MacroSection { id: string; label: string; chunks: number[] }
 interface Skit {
   id: string; title: string; subtitle: string; speakers: string[]
   chunks: Chunk[]; macroSections: MacroSection[]; createdAt: string; updatedAt?: string
+  tags?: string[]
 }
 interface SkitProgress { chunkMastery: Record<number, number> }
 type Tool = 'read' | 'fill' | 'firstletter' | 'rsvp'
@@ -130,7 +131,7 @@ function loadProgress(id: string): SkitProgress {
 }
 function saveProgress(id: string, p: SkitProgress) { localStorage.setItem(`${PROGRESS_KEY}-${id}`, JSON.stringify(p)) }
 
-function parseSkit(raw: string, title: string): Skit {
+function parseSkit(raw: string, title: string, tags?: string[]): Skit {
   const paras = raw.split(/\n\s*\n/).filter(p => p.trim())
   const speakerPat = /^([A-Z][A-Z0-9 ]+):\s*/
   const speakers = new Set<string>()
@@ -154,6 +155,7 @@ function parseSkit(raw: string, title: string): Skit {
     title, subtitle: `${chunks.length} sections · ${chunks.reduce((a,c) => a+c.lines.length, 0)} lines · ${wordCount} words`,
     speakers: [...speakers].length ? [...speakers] : [''],
     chunks, macroSections: macros, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    ...(tags && tags.length > 0 ? { tags } : {}),
   }
 }
 
@@ -173,6 +175,7 @@ function encodeSkitForShare(skit: Skit): string {
       speakers: skit.speakers,
       chunks: skit.chunks,
       macroSections: skit.macroSections,
+      ...(skit.tags && skit.tags.length > 0 ? { tags: skit.tags } : {}),
     }
     return btoa(JSON.stringify(data))
   } catch { return '' }
@@ -190,6 +193,7 @@ function decodeSkitFromUrl(encoded: string): Skit | null {
       chunks: data.chunks,
       macroSections: data.macroSections || [{ id: 'all', label: 'Full Text', chunks: data.chunks.map((c: Chunk) => c.id) }],
       createdAt: new Date().toISOString(),
+      ...(data.tags ? { tags: data.tags } : {}),
     }
   } catch { return null }
 }
@@ -854,9 +858,111 @@ function GuideProgressBadge({ skitId }: { skitId: string }) {
   )
 }
 
+type SortMode = 'recent' | 'az' | 'progress' | 'tag'
+
+function getGuideCompletionPct(skitId: string): number {
+  const completed = loadGuideProgress(skitId)
+  const done = Object.values(completed).filter(Boolean).length
+  return STUDY_STEPS.length > 0 ? Math.round(done / STUDY_STEPS.length * 100) : 0
+}
+
+function SkitCard({ skit, onOpen, onDelete, onEdit, onShare }: {
+  skit: Skit; onOpen: (s: Skit) => void; onDelete: (id: string) => void; onEdit: (s: Skit) => void; onShare: (s: Skit) => void
+}) {
+  return (
+    <div onClick={() => onOpen(skit)} style={{
+      background: 'var(--surface)', borderRadius: 'var(--radius)',
+      border: '1.5px solid var(--border)', padding: '14px 16px', cursor: 'pointer',
+      transition: 'border-color 0.15s, box-shadow 0.15s',
+    }}
+      onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--green-main)'; e.currentTarget.style.boxShadow = '0 2px 12px rgba(5,150,105,0.1)' }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.boxShadow = 'none' }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <h3 style={{ fontWeight: 700, fontSize: 15, color: 'var(--green-dark)' }}>{skit.title}</h3>
+          <p style={{ color: 'var(--text-secondary)', fontSize: 12, marginTop: 2 }}>{skit.subtitle}</p>
+          {skit.tags && skit.tags.length > 0 && (
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
+              {skit.tags.map(tag => (
+                <span key={tag} style={{
+                  fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 8,
+                  background: 'var(--pink-faded)', color: 'var(--pink-dark)',
+                  border: '1px solid var(--pink-mid)',
+                }}>{tag}</span>
+              ))}
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+          <button onClick={e => { e.stopPropagation(); onShare(skit) }} title="Share" style={{
+            fontSize: 12, color: 'var(--text-secondary)', padding: '4px 8px', borderRadius: 4,
+            background: 'var(--surface-alt)', border: '1px solid var(--border)', fontWeight: 500,
+          }}>🔗 Share</button>
+          <button onClick={e => { e.stopPropagation(); onEdit(skit) }} title="Edit" style={{
+            fontSize: 12, color: 'var(--text-secondary)', padding: '4px 8px', borderRadius: 4,
+            background: 'var(--surface-alt)', border: '1px solid var(--border)', fontWeight: 500,
+          }}>✏️ Edit</button>
+          {!SEED_SKITS.some(s => s.id === skit.id) && (
+            <button onClick={e => { e.stopPropagation(); onDelete(skit.id) }} title="Delete" style={{
+              fontSize: 11, color: '#dc2626', padding: '4px 8px', borderRadius: 4,
+              background: 'rgba(220,38,38,0.08)', border: '1px solid rgba(220,38,38,0.3)', fontWeight: 600,
+            }}>✕</button>
+          )}
+        </div>
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+        <div style={{ display: 'flex', gap: 14, fontSize: 12, color: 'var(--text-dim)' }}>
+          <span>{skit.chunks.length} sections</span>
+          <span>{skit.chunks.reduce((a,c) => a+c.lines.length, 0)} lines</span>
+          <span>{countWords(skit)} words</span>
+        </div>
+        <GuideProgressBadge skitId={skit.id} />
+      </div>
+    </div>
+  )
+}
+
 function LibraryView({ library, onOpen, onDelete, onEdit, onImport, onShare }: {
   library: Skit[]; onOpen: (s: Skit) => void; onDelete: (id: string) => void; onEdit: (s: Skit) => void; onImport: () => void; onShare: (s: Skit) => void
 }) {
+  const [sortMode, setSortMode] = useState<SortMode>('recent')
+
+  const sorted = useMemo(() => {
+    const arr = [...library]
+    switch (sortMode) {
+      case 'recent': return arr.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      case 'az': return arr.sort((a, b) => a.title.localeCompare(b.title))
+      case 'progress': return arr.sort((a, b) => getGuideCompletionPct(b.id) - getGuideCompletionPct(a.id))
+      case 'tag': return arr // handled specially below
+      default: return arr
+    }
+  }, [library, sortMode])
+
+  const tagGroups = useMemo(() => {
+    if (sortMode !== 'tag') return null
+    const groups: Record<string, Skit[]> = {}
+    const untagged: Skit[] = []
+    for (const skit of library) {
+      if (skit.tags && skit.tags.length > 0) {
+        for (const tag of skit.tags) {
+          if (!groups[tag]) groups[tag] = []
+          groups[tag].push(skit)
+        }
+      } else {
+        untagged.push(skit)
+      }
+    }
+    return { groups, untagged }
+  }, [library, sortMode])
+
+  const sortButtons: { mode: SortMode; label: string }[] = [
+    { mode: 'recent', label: 'Recent' },
+    { mode: 'az', label: 'A-Z' },
+    { mode: 'progress', label: 'Progress' },
+    { mode: 'tag', label: 'Tag' },
+  ]
+
   return (
     <>
       <div style={{ marginBottom: 20 }}>
@@ -866,54 +972,58 @@ function LibraryView({ library, onOpen, onDelete, onEdit, onImport, onShare }: {
       <button onClick={onImport} style={{
         width: '100%', padding: 14, borderRadius: 'var(--radius)',
         background: 'var(--green-pale)', border: '2px dashed var(--green-mid)',
-        fontSize: 15, fontWeight: 700, color: 'var(--green-main)', marginBottom: 20,
+        fontSize: 15, fontWeight: 700, color: 'var(--green-main)', marginBottom: 14,
       }}>+ Add New Text</button>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {library.map(skit => (
-          <div key={skit.id} onClick={() => onOpen(skit)} style={{
-            background: 'var(--surface)', borderRadius: 'var(--radius)',
-            border: '1.5px solid var(--border)', padding: '14px 16px', cursor: 'pointer',
-            transition: 'border-color 0.15s, box-shadow 0.15s',
-          }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--green-main)'; e.currentTarget.style.boxShadow = '0 2px 12px rgba(5,150,105,0.1)' }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.boxShadow = 'none' }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <h3 style={{ fontWeight: 700, fontSize: 15, color: 'var(--green-dark)' }}>{skit.title}</h3>
-                <p style={{ color: 'var(--text-secondary)', fontSize: 12, marginTop: 2 }}>{skit.subtitle}</p>
-              </div>
-              <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-                <button onClick={e => { e.stopPropagation(); onShare(skit) }} title="Share" style={{
-                  fontSize: 12, color: 'var(--text-secondary)', padding: '4px 8px', borderRadius: 4,
-                  background: 'var(--surface-alt)', border: '1px solid var(--border)',
-                  fontWeight: 500,
-                }}>🔗 Share</button>
-                <button onClick={e => { e.stopPropagation(); onEdit(skit) }} title="Edit" style={{
-                  fontSize: 12, color: 'var(--text-secondary)', padding: '4px 8px', borderRadius: 4,
-                  background: 'var(--surface-alt)', border: '1px solid var(--border)',
-                  fontWeight: 500,
-                }}>✏️ Edit</button>
-                {!SEED_SKITS.some(s => s.id === skit.id) && (
-                  <button onClick={e => { e.stopPropagation(); onDelete(skit.id) }} title="Delete" style={{
-                    fontSize: 11, color: '#dc2626', padding: '4px 8px', borderRadius: 4,
-                    background: 'rgba(220,38,38,0.08)', border: '1px solid rgba(220,38,38,0.3)',
-                    fontWeight: 600,
-                  }}>✕</button>
-                )}
-              </div>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
-              <div style={{ display: 'flex', gap: 14, fontSize: 12, color: 'var(--text-dim)' }}>
-                <span>{skit.chunks.length} sections</span>
-                <span>{skit.chunks.reduce((a,c) => a+c.lines.length, 0)} lines</span>
-                <span>{countWords(skit)} words</span>
-              </div>
-              <GuideProgressBadge skitId={skit.id} />
-            </div>
-          </div>
+
+      {/* Sort controls */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+        {sortButtons.map(sb => (
+          <button key={sb.mode} onClick={() => setSortMode(sb.mode)} style={{
+            padding: '4px 12px', borderRadius: 14, fontSize: 11, fontWeight: 600,
+            background: sortMode === sb.mode ? 'var(--green-faded)' : 'var(--surface-alt)',
+            color: sortMode === sb.mode ? 'var(--green-dark)' : 'var(--text-secondary)',
+            border: `1px solid ${sortMode === sb.mode ? 'var(--green-mid)' : 'var(--border)'}`,
+          }}>{sb.label}</button>
         ))}
       </div>
+
+      {sortMode === 'tag' && tagGroups ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {Object.entries(tagGroups.groups).sort(([a],[b]) => a.localeCompare(b)).map(([tag, skits]) => (
+            <div key={tag}>
+              <div style={{
+                fontSize: 11, fontWeight: 700, color: 'var(--pink-dark)', textTransform: 'uppercase',
+                letterSpacing: 1, marginBottom: 6, padding: '4px 8px', borderRadius: 4,
+                background: 'var(--pink-faded)', display: 'inline-block',
+              }}>{tag}</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {skits.map(skit => (
+                  <SkitCard key={skit.id} skit={skit} onOpen={onOpen} onDelete={onDelete} onEdit={onEdit} onShare={onShare} />
+                ))}
+              </div>
+            </div>
+          ))}
+          {tagGroups.untagged.length > 0 && (
+            <div>
+              <div style={{
+                fontSize: 11, fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase',
+                letterSpacing: 1, marginBottom: 6,
+              }}>Untagged</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {tagGroups.untagged.map(skit => (
+                  <SkitCard key={skit.id} skit={skit} onOpen={onOpen} onDelete={onDelete} onEdit={onEdit} onShare={onShare} />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {sorted.map(skit => (
+            <SkitCard key={skit.id} skit={skit} onOpen={onOpen} onDelete={onDelete} onEdit={onEdit} onShare={onShare} />
+          ))}
+        </div>
+      )}
     </>
   )
 }
@@ -925,7 +1035,13 @@ function LibraryView({ library, onOpen, onDelete, onEdit, onImport, onShare }: {
 function ImportView({ onAdd, onCancel }: { onAdd: (s: Skit) => void; onCancel: () => void }) {
   const [title, setTitle] = useState('')
   const [text, setText] = useState('')
+  const [tagsInput, setTagsInput] = useState('')
   const ok = title.trim() && text.trim()
+  const handleAdd = () => {
+    if (!ok) return
+    const tags = tagsInput.split(',').map(t => t.trim()).filter(Boolean)
+    onAdd(parseSkit(text, title.trim(), tags.length > 0 ? tags : undefined))
+  }
   return (
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -937,11 +1053,17 @@ function ImportView({ onAdd, onCancel }: { onAdd: (s: Skit) => void; onCancel: (
         <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g., Hamlet's Soliloquy" />
       </div>
       <div style={{ marginBottom: 14 }}>
+        <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4, color: 'var(--text-secondary)' }}>
+          Tags <span style={{ fontWeight: 400, color: 'var(--text-dim)' }}>(comma-separated, optional)</span>
+        </label>
+        <input value={tagsInput} onChange={e => setTagsInput(e.target.value)} placeholder="e.g., poem, classic, school" />
+      </div>
+      <div style={{ marginBottom: 14 }}>
         <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4, color: 'var(--text-secondary)' }}>Text</label>
         <textarea value={text} onChange={e => setText(e.target.value)}
           placeholder={"Paste your text here.\n\nBlank lines \u2192 sections.\nSPEAKER: text \u2192 dialogue."} style={{ minHeight: 200 }} />
       </div>
-      <button onClick={() => ok && onAdd(parseSkit(text, title.trim()))} disabled={!ok} style={{
+      <button onClick={handleAdd} disabled={!ok} style={{
         width: '100%', padding: 13, borderRadius: 'var(--radius)',
         background: ok ? 'var(--green-main)' : 'var(--border)',
         color: ok ? '#fff' : 'var(--text-dim)', fontSize: 15, fontWeight: 700,
@@ -1019,6 +1141,146 @@ function loadGuideProgress(skitId: string): Record<number, boolean> {
 }
 function saveGuideProgress(skitId: string, completed: Record<number, boolean>) {
   localStorage.setItem(`${GUIDE_STORAGE}-${skitId}`, JSON.stringify(completed))
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SKIT NOTES (per-skit, localStorage)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const NOTES_STORAGE = 'skit-notes'
+function loadNotes(skitId: string): string {
+  try { return localStorage.getItem(`${NOTES_STORAGE}-${skitId}`) || '' }
+  catch { return '' }
+}
+function saveNotes(skitId: string, notes: string) {
+  localStorage.setItem(`${NOTES_STORAGE}-${skitId}`, notes)
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DAILY STUDY PLAN (per-skit start date)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const STUDY_START_STORAGE = 'skit-study-start'
+function loadStudyStart(skitId: string): string | null {
+  try { return localStorage.getItem(`${STUDY_START_STORAGE}-${skitId}`) }
+  catch { return null }
+}
+function saveStudyStart(skitId: string, date: string) {
+  localStorage.setItem(`${STUDY_START_STORAGE}-${skitId}`, date)
+}
+
+function getDayNumber(skitId: string): number {
+  let start = loadStudyStart(skitId)
+  if (!start) {
+    start = new Date().toISOString().split('T')[0]
+    saveStudyStart(skitId, start)
+  }
+  const startDate = new Date(start)
+  const today = new Date()
+  today.setHours(0,0,0,0)
+  startDate.setHours(0,0,0,0)
+  return Math.floor((today.getTime() - startDate.getTime()) / (1000*60*60*24)) + 1
+}
+
+function getTodaySteps(day: number): { startStep: number; endStep: number; label: string } {
+  if (day <= 1) return { startStep: 1, endStep: 3, label: 'Familiarize' }
+  if (day <= 2) return { startStep: 4, endStep: 6, label: 'Active Recall' }
+  if (day <= 3) return { startStep: 7, endStep: 9, label: 'Strengthen' }
+  return { startStep: 10, endStep: 17, label: 'Master & Perform' }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TODAY'S GOAL
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function TodayGoal({ skitId, onNavigate }: { skitId: string; onNavigate: (tool: Tool) => void }) {
+  const day = getDayNumber(skitId)
+  const { startStep, endStep, label } = getTodaySteps(day)
+  const guideProgress = loadGuideProgress(skitId)
+  const todaySteps = STUDY_STEPS.filter(s => s.step >= startStep && s.step <= endStep)
+  const nextStep = todaySteps.find(s => !guideProgress[s.step]) || todaySteps[0]
+  const todayDone = todaySteps.filter(s => guideProgress[s.step]).length
+
+  return (
+    <div style={{
+      padding: '10px 14px', marginBottom: 12, borderRadius: 'var(--radius)',
+      background: 'var(--green-pale)', border: '1px solid var(--green-mid)',
+      display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+    }}>
+      <span style={{ fontSize: 16 }}>📅</span>
+      <div style={{ flex: 1, minWidth: 140 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--green-dark)' }}>
+          Day {day}: {label}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+          {nextStep && !guideProgress[nextStep.step]
+            ? `Step ${nextStep.step} — ${nextStep.title}`
+            : 'All steps done for today!'}
+          <span style={{ marginLeft: 6, opacity: 0.7 }}>({todayDone}/{todaySteps.length} done)</span>
+        </div>
+      </div>
+      {nextStep && !guideProgress[nextStep.step] && (
+        <button onClick={() => onNavigate(nextStep.tool)} style={{
+          padding: '5px 14px', borderRadius: 'var(--radius-sm)',
+          background: 'var(--green-main)', color: '#fff', fontSize: 12, fontWeight: 700,
+        }}>Start</button>
+      )}
+    </div>
+  )
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   NOTES PANEL
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function NotesPanel({ skitId }: { skitId: string }) {
+  const [open, setOpen] = useState(false)
+  const [notes, setNotes] = useState(() => loadNotes(skitId))
+  useEffect(() => { setNotes(loadNotes(skitId)) }, [skitId])
+  useEffect(() => { saveNotes(skitId, notes) }, [notes, skitId])
+
+  return (
+    <div style={{ marginBottom: 14, display: 'inline-block' }}>
+      <button onClick={() => setOpen(!open)} style={{
+        padding: '8px 16px', borderRadius: 'var(--radius-sm)',
+        background: open ? 'var(--pink-faded)' : 'var(--surface-alt)',
+        border: `1px solid ${open ? 'var(--pink)' : 'var(--border)'}`,
+        fontSize: 13, fontWeight: 600,
+        color: open ? 'var(--pink-dark)' : 'var(--text-secondary)',
+        display: 'flex', alignItems: 'center', gap: 6,
+      }}>
+        📝 Notes
+        <span style={{ fontSize: 10, marginLeft: 4 }}>{open ? '▲' : '▼'}</span>
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }}
+            style={{ overflow: 'hidden' }}
+          >
+            <div style={{
+              marginTop: 8, padding: 12, borderRadius: 'var(--radius)',
+              border: '1px solid var(--border)', background: 'var(--surface)',
+            }}>
+              <textarea
+                value={notes}
+                onChange={e => setNotes(e.target.value)}
+                placeholder="Write your notes about this skit here..."
+                style={{
+                  minHeight: 100, fontSize: 13, lineHeight: 1.6,
+                  resize: 'vertical', width: '100%',
+                }}
+              />
+              <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 4, textAlign: 'right' }}>
+                {notes.length} characters
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
 }
 
 function StudyGuide({ skitId, onNavigate }: { skitId: string; onNavigate: (tool: Tool) => void }) {
@@ -1171,11 +1433,42 @@ function StudyGuide({ skitId, onNavigate }: { skitId: string; onNavigate: (tool:
    PRACTICE -- title + stats + study guide + tools + content
    ═══════════════════════════════════════════════════════════════════════════ */
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   LIFTED TOOL STATE TYPES (Change 3: preserve progress across tool switches)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+interface FillToolState {
+  answers: Record<string, string>
+  checkedBlanks: Record<string, boolean>
+  attempts: Record<string, number>
+  pct: number
+  hintType: 'firstletter' | 'wordcount' | 'none'
+  gen: number
+  allDone: boolean
+}
+
+interface FirstLetterState {
+  revealed: Set<number>
+}
+
+interface RSVPState {
+  idx: number
+  playing: boolean
+  wpm: number
+}
+
 function PracticeView({ skit, tool, setTool, chunks, lines }: {
   skit: Skit; tool: Tool; setTool: (t: Tool) => void
   chunks: Chunk[]; lines: { speaker: string; text: string; chunkId: number; chunkLabel: string }[]
 }) {
   const [selectedChunk, setSelectedChunk] = useState<number | null>(null)
+
+  // Lifted tool states (Change 3)
+  const [fillState, setFillState] = useState<FillToolState>({
+    answers: {}, checkedBlanks: {}, attempts: {}, pct: 30, hintType: 'wordcount', gen: 0, allDone: false,
+  })
+  const [flState, setFlState] = useState<FirstLetterState>({ revealed: new Set() })
+  const [rsvpState, setRsvpState] = useState<RSVPState>({ idx: 0, playing: false, wpm: 250 })
 
   // Filter lines and chunks based on selection
   const filteredChunks = selectedChunk !== null ? chunks.filter(c => c.id === selectedChunk) : chunks
@@ -1192,8 +1485,14 @@ function PracticeView({ skit, tool, setTool, chunks, lines }: {
         </p>
       </div>
 
-      {/* Study Guide */}
-      <StudyGuide skitId={skit.id} onNavigate={setTool} />
+      {/* Today's Goal (Change 4) */}
+      <TodayGoal skitId={skit.id} onNavigate={setTool} />
+
+      {/* Study Guide + Notes row */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 2 }}>
+        <StudyGuide skitId={skit.id} onNavigate={setTool} />
+        <NotesPanel skitId={skit.id} />
+      </div>
 
       {/* Tool bar */}
       <div className="tool-grid" style={{
@@ -1223,14 +1522,19 @@ function PracticeView({ skit, tool, setTool, chunks, lines }: {
         {/* Chunk selector */}
         <ChunkSelector chunks={chunks} selected={selectedChunk} onSelect={setSelectedChunk} />
 
-        <AnimatePresence mode="wait">
-          <motion.div key={`${tool}-${selectedChunk}`} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }}>
-            {tool === 'read' && <ReadTool lines={filteredLines} chunks={filteredChunks} skitId={skit.id} singleChunk={selectedChunk !== null} />}
-            {tool === 'fill' && <FillTool lines={filteredLines} />}
-            {tool === 'firstletter' && <FirstLetterTool lines={filteredLines} />}
-            {tool === 'rsvp' && <RSVPTool lines={filteredLines} />}
-          </motion.div>
-        </AnimatePresence>
+        {/* No AnimatePresence wrapping unmount — render all, show/hide via display */}
+        <div style={{ display: tool === 'read' ? 'block' : 'none' }}>
+          <ReadTool lines={filteredLines} chunks={filteredChunks} skitId={skit.id} singleChunk={selectedChunk !== null} />
+        </div>
+        <div style={{ display: tool === 'fill' ? 'block' : 'none' }}>
+          <FillTool lines={filteredLines} state={fillState} setState={setFillState} />
+        </div>
+        <div style={{ display: tool === 'firstletter' ? 'block' : 'none' }}>
+          <FirstLetterTool lines={filteredLines} state={flState} setState={setFlState} />
+        </div>
+        <div style={{ display: tool === 'rsvp' ? 'block' : 'none' }}>
+          <RSVPTool lines={filteredLines} state={rsvpState} setState={setRsvpState} />
+        </div>
       </div>
     </>
   )
@@ -1334,21 +1638,29 @@ function ReadTool({ lines, chunks, skitId, singleChunk }: {
    FILL BLANK
    ═══════════════════════════════════════════════════════════════════════════ */
 
-function FillTool({ lines }: { lines: { speaker: string; text: string }[] }) {
-  const [pct, setPct] = useState(30)
-  const [hintType, setHintType] = useState<'firstletter'|'wordcount'|'none'>('wordcount')
-  const [answers, setAnswers] = useState<Record<string, string>>({})
-  const [checked, setChecked] = useState(false)
-  const [gen, setGen] = useState(0)
+function FillTool({ lines, state, setState }: {
+  lines: { speaker: string; text: string }[]
+  state: FillToolState; setState: React.Dispatch<React.SetStateAction<FillToolState>>
+}) {
+  const { answers, checkedBlanks, attempts, pct, hintType, gen, allDone } = state
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({})
 
   const tokens = useMemo(() =>
     lines.flatMap((l, li) => l.text.split(/\s+/).map((w, wi) => ({ word: w, key: `${li}-${wi}`, li, wi, speaker: l.speaker }))),
   [lines])
 
+  // Strip trailing punctuation from a word for comparison
+  const stripTrailingPunct = (w: string) => {
+    const m = w.match(/^(.+?)([^a-zA-Z0-9']*)$/)
+    return m ? { core: m[1], punct: m[2] } : { core: w, punct: '' }
+  }
+
   const blanked = useMemo(() => {
     const minLen = pct >= 100 ? 1 : pct >= 70 ? 2 : 3
-    const eligible = tokens.filter(t => t.word.replace(/[^a-zA-Z]/g, '').length >= minLen).map(t => t.key)
+    const eligible = tokens.filter(t => {
+      const { core } = stripTrailingPunct(t.word)
+      return core.replace(/[^a-zA-Z]/g, '').length >= minLen
+    }).map(t => t.key)
     const shuffled = [...eligible].sort(() => Math.random() - 0.5)
     return new Set(shuffled.slice(0, Math.ceil(eligible.length * (Math.min(pct, 100) / 100))))
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1356,19 +1668,92 @@ function FillTool({ lines }: { lines: { speaker: string; text: string }[] }) {
 
   const blankKeys = useMemo(() => tokens.filter(t => blanked.has(t.key)).map(t => t.key), [tokens, blanked])
   const normalize = (s: string) => (s||'').trim().replace(/[^a-zA-Z0-9']/g, '').toLowerCase()
-  const correct = (k: string) => normalize(tokens.find(t => t.key === k)!.word) === normalize(answers[k]||'')
-  const score = checked ? blankKeys.filter(correct).length : 0
-  const regenerate = () => { setGen(g => g+1); setAnswers({}); setChecked(false) }
+
+  const isCorrect = (k: string) => {
+    const tok = tokens.find(t => t.key === k)!
+    const { core } = stripTrailingPunct(tok.word)
+    return normalize(core) === normalize(answers[k]||'')
+  }
+
+  const score = blankKeys.filter(k => checkedBlanks[k] && isCorrect(k)).length
+  const totalChecked = blankKeys.filter(k => checkedBlanks[k]).length
+
+  const regenerate = () => {
+    setState(s => ({ ...s, gen: s.gen+1, answers: {}, checkedBlanks: {}, attempts: {}, allDone: false }))
+  }
 
   const focusNext = (key: string) => {
     const i = blankKeys.indexOf(key)
-    const next = blankKeys[(i+1) % blankKeys.length]
-    inputRefs.current[next]?.focus()
+    // Find next unchecked blank
+    for (let j = 1; j <= blankKeys.length; j++) {
+      const next = blankKeys[(i+j) % blankKeys.length]
+      if (!checkedBlanks[next]) {
+        inputRefs.current[next]?.focus()
+        return
+      }
+    }
+  }
+
+  const checkSingle = (key: string) => {
+    const tok = tokens.find(t => t.key === key)!
+    const { core } = stripTrailingPunct(tok.word)
+    const att = (attempts[key] || 0) + 1
+
+    if (normalize(core) === normalize(answers[key]||'')) {
+      // Correct
+      setState(s => ({
+        ...s,
+        checkedBlanks: { ...s.checkedBlanks, [key]: true },
+        attempts: { ...s.attempts, [key]: att },
+      }))
+      // Check if all done
+      setTimeout(() => {
+        setState(s => {
+          const allChecked = blankKeys.every(k => s.checkedBlanks[k] || k === key)
+          return allChecked ? { ...s, allDone: true } : s
+        })
+      }, 50)
+      focusNext(key)
+    } else {
+      // Wrong
+      if (att >= 2) {
+        // Reveal after 2 wrong attempts
+        setState(s => ({
+          ...s,
+          checkedBlanks: { ...s.checkedBlanks, [key]: true },
+          answers: { ...s.answers, [key]: '✗' },
+          attempts: { ...s.attempts, [key]: att },
+        }))
+        setTimeout(() => {
+          setState(s => {
+            const allChecked = blankKeys.every(k => s.checkedBlanks[k] || k === key)
+            return allChecked ? { ...s, allDone: true } : s
+          })
+        }, 50)
+        focusNext(key)
+      } else {
+        // Flash red, clear, let retry
+        setState(s => ({ ...s, attempts: { ...s.attempts, [key]: att } }))
+        const el = inputRefs.current[key]
+        if (el) {
+          el.style.background = 'var(--incorrect-faded)'
+          el.style.borderColor = 'var(--incorrect)'
+          setTimeout(() => {
+            setState(s => ({ ...s, answers: { ...s.answers, [key]: '' } }))
+            el.style.background = 'var(--surface-alt)'
+            el.style.borderColor = 'var(--border)'
+            el.focus()
+          }, 400)
+        }
+      }
+    }
   }
 
   const getHint = (word: string) => {
-    if (hintType === 'firstletter') return word[0] + '_'.repeat(word.replace(/[^a-zA-Z]/g,'').length - 1)
-    if (hintType === 'wordcount') return word.replace(/[^a-zA-Z]/g,'').length.toString()
+    const { core } = stripTrailingPunct(word)
+    const cleanLen = core.replace(/[^a-zA-Z]/g,'').length
+    if (hintType === 'firstletter') return core[0] + '_'.repeat(Math.max(0, cleanLen - 1))
+    if (hintType === 'wordcount') return cleanLen.toString()
     return '___'
   }
 
@@ -1378,7 +1763,7 @@ function FillTool({ lines }: { lines: { speaker: string; text: string }[] }) {
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 600 }}>Blanks:</span>
         {[20, 30, 50, 70, 100].map(p => (
-          <button key={p} onClick={() => { setPct(p); regenerate() }} style={{
+          <button key={p} onClick={() => { setState(s => ({ ...s, pct: p })); regenerate() }} style={{
             padding: '3px 10px', borderRadius: 14, fontSize: 11, fontWeight: 600,
             background: pct === p ? 'var(--pink-faded)' : 'var(--surface-alt)',
             color: pct === p ? 'var(--pink-dark)' : 'var(--text-secondary)',
@@ -1389,7 +1774,7 @@ function FillTool({ lines }: { lines: { speaker: string; text: string }[] }) {
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 600 }}>Hints:</span>
         {([['firstletter','1st Letter'],['wordcount','# Chars'],['none','None']] as const).map(([id, label]) => (
-          <button key={id} onClick={() => setHintType(id)} style={{
+          <button key={id} onClick={() => setState(s => ({ ...s, hintType: id }))} style={{
             padding: '3px 10px', borderRadius: 14, fontSize: 11, fontWeight: 600,
             background: hintType === id ? 'var(--green-faded)' : 'var(--surface-alt)',
             color: hintType === id ? 'var(--green-dark)' : 'var(--text-secondary)',
@@ -1406,52 +1791,69 @@ function FillTool({ lines }: { lines: { speaker: string; text: string }[] }) {
             {l.text.split(/\s+/).map((w, wi) => {
               const key = `${li}-${wi}`
               if (!blanked.has(key)) return <span key={key}>{w} </span>
-              const clean = w.replace(/[^a-zA-Z']/g,'')
+              const { core, punct } = stripTrailingPunct(w)
+              const cleanLen = core.replace(/[^a-zA-Z']/g,'').length
               const val = answers[key] || ''
-              const ok = checked && correct(key)
-              const wrong = checked && !correct(key)
+              const isChecked = !!checkedBlanks[key]
+              const ok = isChecked && isCorrect(key)
+              const wrong = isChecked && !isCorrect(key)
               return (
-                <span key={key} style={{ display: 'inline-block', marginRight: 3 }}>
+                <span key={key} style={{ display: 'inline-flex', alignItems: 'baseline', marginRight: 3 }}>
                   <input
                     ref={el => { inputRefs.current[key] = el }}
-                    value={val} onChange={e => setAnswers(p => ({ ...p, [key]: e.target.value }))}
-                    onKeyDown={e => { if (e.key === 'Tab' || e.key === 'Enter') { e.preventDefault(); focusNext(key) } }}
-                    disabled={checked} placeholder={getHint(w)}
+                    value={isChecked && wrong ? '' : val}
+                    onChange={e => !isChecked && setState(s => ({ ...s, answers: { ...s.answers, [key]: e.target.value } }))}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') { e.preventDefault(); checkSingle(key) }
+                      else if (e.key === 'Tab') { e.preventDefault(); focusNext(key) }
+                    }}
+                    disabled={isChecked}
+                    placeholder={getHint(w)}
                     className="fill-blank-input"
                     style={{
-                      width: Math.max(50, clean.length * 9 + 12), padding: '2px 5px', fontSize: 13,
+                      width: Math.max(50, cleanLen * 9 + 12), padding: '2px 5px', fontSize: 13,
                       borderRadius: 4, textAlign: 'center', minHeight: 'auto', minWidth: 'auto',
                       background: ok ? 'var(--green-faded)' : wrong ? 'var(--incorrect-faded)' : 'var(--surface-alt)',
                       borderColor: ok ? 'var(--green-mid)' : wrong ? 'var(--incorrect)' : 'var(--border)',
                     }}
                   />
-                  {wrong && <span style={{ fontSize: 10, color: 'var(--pink)', display: 'block' }}>{w}</span>}
+                  {/* Check button per blank */}
+                  {!isChecked && (
+                    <button onClick={() => checkSingle(key)} title="Check this blank" style={{
+                      fontSize: 10, color: 'var(--green-main)', fontWeight: 700,
+                      padding: '1px 4px', marginLeft: 1, background: 'none', border: 'none',
+                      cursor: 'pointer', lineHeight: 1,
+                    }}>✓</button>
+                  )}
+                  {/* Trailing punctuation displayed outside input */}
+                  {punct && <span style={{ fontSize: 13 }}>{punct}</span>}
+                  {/* Show correct answer after 2 wrong attempts */}
+                  {wrong && <span style={{ fontSize: 10, color: 'var(--pink)', marginLeft: 2 }}>{core}</span>}
+                  <span> </span>
                 </span>
               )
             })}
           </div>
         ))}
       </div>
-      {/* Check / Score */}
-      <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center' }}>
-        {!checked ? (
-          <button onClick={() => setChecked(true)} style={{
-            padding: '8px 22px', borderRadius: 'var(--radius-sm)',
-            background: 'var(--green-main)', color: '#fff', fontWeight: 700, fontSize: 13,
-          }}>Check</button>
-        ) : (
-          <>
-            <span style={{ fontSize: 14, fontWeight: 700, color: score/blankKeys.length >= 0.8 ? 'var(--green-main)' : 'var(--pink)' }}>
-              {score}/{blankKeys.length} ({Math.round(score/blankKeys.length*100)}%)
-            </span>
-            <button onClick={regenerate} style={{
-              padding: '8px 18px', borderRadius: 'var(--radius-sm)',
-              background: 'var(--surface-alt)', border: '1px solid var(--border)',
-              fontSize: 13, fontWeight: 600, marginLeft: 'auto',
-            }}>Try Again</button>
-          </>
-        )}
-      </div>
+      {/* Score — shown only when all blanks checked */}
+      {allDone && (
+        <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: blankKeys.length > 0 && score/blankKeys.length >= 0.8 ? 'var(--green-main)' : 'var(--pink)' }}>
+            {score}/{blankKeys.length} ({blankKeys.length > 0 ? Math.round(score/blankKeys.length*100) : 0}%)
+          </span>
+          <button onClick={regenerate} style={{
+            padding: '8px 18px', borderRadius: 'var(--radius-sm)',
+            background: 'var(--surface-alt)', border: '1px solid var(--border)',
+            fontSize: 13, fontWeight: 600, marginLeft: 'auto',
+          }}>Try Again</button>
+        </div>
+      )}
+      {!allDone && totalChecked > 0 && (
+        <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-dim)' }}>
+          {totalChecked}/{blankKeys.length} blanks checked — keep going!
+        </div>
+      )}
     </div>
   )
 }
@@ -1460,16 +1862,26 @@ function FillTool({ lines }: { lines: { speaker: string; text: string }[] }) {
    FIRST LETTER
    ═══════════════════════════════════════════════════════════════════════════ */
 
-function FirstLetterTool({ lines }: { lines: { speaker: string; text: string }[] }) {
-  const [revealed, setRevealed] = useState<Set<number>>(new Set())
+function FirstLetterTool({ lines, state, setState }: {
+  lines: { speaker: string; text: string }[]
+  state: FirstLetterState; setState: React.Dispatch<React.SetStateAction<FirstLetterState>>
+}) {
+  const { revealed } = state
   const fl = (t: string) => t.split(/\s+/).map(w => w[0] + '\u00B7'.repeat(w.length-1)).join(' ')
+  const toggle = (i: number) => {
+    setState(s => {
+      const n = new Set(s.revealed)
+      n.has(i) ? n.delete(i) : n.add(i)
+      return { ...s, revealed: n }
+    })
+  }
   return (
     <div>
       <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>Tap a line to reveal. Try to recall first.</p>
       {lines.map((l, i) => {
         const show = revealed.has(i)
         return (
-          <div key={i} onClick={() => setRevealed(p => { const n = new Set(p); n.has(i) ? n.delete(i) : n.add(i); return n })} style={{
+          <div key={i} onClick={() => toggle(i)} style={{
             marginBottom: 6, padding: '7px 10px', borderRadius: 'var(--radius-sm)',
             background: show ? 'var(--fl-revealed-bg, var(--green-faded))' : 'var(--surface-alt)',
             cursor: 'pointer', lineHeight: 1.7, transition: 'background 0.15s',
@@ -1495,7 +1907,10 @@ function FirstLetterTool({ lines }: { lines: { speaker: string; text: string }[]
    RSVP
    ═══════════════════════════════════════════════════════════════════════════ */
 
-function RSVPTool({ lines }: { lines: { speaker: string; text: string }[] }) {
+function RSVPTool({ lines, state, setState }: {
+  lines: { speaker: string; text: string }[]
+  state: RSVPState; setState: React.Dispatch<React.SetStateAction<RSVPState>>
+}) {
   const WPM_PRESETS = [100, 200, 300, 450, 600]
   const words = useMemo(() => {
     const r: { text: string; isSpeaker: boolean }[] = []
@@ -1506,9 +1921,10 @@ function RSVPTool({ lines }: { lines: { speaker: string; text: string }[] }) {
     return r
   }, [lines])
 
-  const [wpm, setWpm] = useState(250)
-  const [idx, setIdx] = useState(0)
-  const [playing, setPlaying] = useState(false)
+  const { wpm, idx, playing } = state
+  const setWpm = (v: number) => setState(s => ({ ...s, wpm: v }))
+  const setIdx = (v: number | ((i: number) => number)) => setState(s => ({ ...s, idx: typeof v === 'function' ? v(s.idx) : v }))
+  const setPlaying = (v: boolean | ((p: boolean) => boolean)) => setState(s => ({ ...s, playing: typeof v === 'function' ? v(s.playing) : v }))
   const timerRef = useRef<number|null>(null)
   const textRef = useRef<HTMLDivElement>(null)
 
