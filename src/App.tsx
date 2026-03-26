@@ -927,9 +927,31 @@ function LibraryView({ library, onOpen, onDelete, onEdit, onImport, onShare }: {
   library: Skit[]; onOpen: (s: Skit) => void; onDelete: (id: string) => void; onEdit: (s: Skit) => void; onImport: () => void; onShare: (s: Skit) => void
 }) {
   const [sortMode, setSortMode] = useState<SortMode>('recent')
+  const [activeTagFilters, setActiveTagFilters] = useState<Set<string>>(new Set())
+
+  // Collect all unique tags across library
+  const allTags = useMemo(() => {
+    const tags = new Set<string>()
+    for (const skit of library) {
+      if (skit.tags) skit.tags.forEach(t => tags.add(t))
+    }
+    return [...tags].sort()
+  }, [library])
+
+  const toggleTagFilter = (tag: string) => {
+    setActiveTagFilters(prev => {
+      const next = new Set(prev)
+      if (next.has(tag)) next.delete(tag); else next.add(tag)
+      return next
+    })
+  }
 
   const sorted = useMemo(() => {
-    const arr = [...library]
+    let arr = [...library]
+    // Apply tag filters if any are active
+    if (activeTagFilters.size > 0) {
+      arr = arr.filter(s => s.tags && s.tags.some(t => activeTagFilters.has(t)))
+    }
     switch (sortMode) {
       case 'recent': return arr.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       case 'az': return arr.sort((a, b) => a.title.localeCompare(b.title))
@@ -937,15 +959,19 @@ function LibraryView({ library, onOpen, onDelete, onEdit, onImport, onShare }: {
       case 'tag': return arr // handled specially below
       default: return arr
     }
-  }, [library, sortMode])
+  }, [library, sortMode, activeTagFilters])
 
   const tagGroups = useMemo(() => {
     if (sortMode !== 'tag') return null
     const groups: Record<string, Skit[]> = {}
     const untagged: Skit[] = []
-    for (const skit of library) {
+    const filteredLib = activeTagFilters.size > 0
+      ? library.filter(s => s.tags && s.tags.some(t => activeTagFilters.has(t)))
+      : library
+    for (const skit of filteredLib) {
       if (skit.tags && skit.tags.length > 0) {
         for (const tag of skit.tags) {
+          if (activeTagFilters.size > 0 && !activeTagFilters.has(tag)) continue
           if (!groups[tag]) groups[tag] = []
           groups[tag].push(skit)
         }
@@ -954,7 +980,7 @@ function LibraryView({ library, onOpen, onDelete, onEdit, onImport, onShare }: {
       }
     }
     return { groups, untagged }
-  }, [library, sortMode])
+  }, [library, sortMode, activeTagFilters])
 
   const sortButtons: { mode: SortMode; label: string }[] = [
     { mode: 'recent', label: 'Recent' },
@@ -976,7 +1002,7 @@ function LibraryView({ library, onOpen, onDelete, onEdit, onImport, onShare }: {
       }}>+ Add New Text</button>
 
       {/* Sort controls */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 6, marginBottom: allTags.length > 0 ? 8 : 14, flexWrap: 'wrap' }}>
         {sortButtons.map(sb => (
           <button key={sb.mode} onClick={() => setSortMode(sb.mode)} style={{
             padding: '4px 12px', borderRadius: 14, fontSize: 11, fontWeight: 600,
@@ -986,6 +1012,32 @@ function LibraryView({ library, onOpen, onDelete, onEdit, onImport, onShare }: {
           }}>{sb.label}</button>
         ))}
       </div>
+
+      {/* Tag filter pills */}
+      {allTags.length > 0 && (
+        <div style={{ display: 'flex', gap: 5, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ fontSize: 10, color: 'var(--text-dim)', fontWeight: 600, marginRight: 2 }}>Tags:</span>
+          {allTags.map(tag => {
+            const active = activeTagFilters.has(tag)
+            return (
+              <button key={tag} onClick={() => toggleTagFilter(tag)} style={{
+                padding: '2px 10px', borderRadius: 10, fontSize: 11, fontWeight: 600,
+                background: active ? 'var(--pink-faded)' : 'var(--surface-alt)',
+                color: active ? 'var(--pink-dark)' : 'var(--text-dim)',
+                border: `1px solid ${active ? 'var(--pink)' : 'var(--border)'}`,
+                transition: 'all 0.12s',
+              }}>{tag}</button>
+            )
+          })}
+          {activeTagFilters.size > 0 && (
+            <button onClick={() => setActiveTagFilters(new Set())} style={{
+              padding: '2px 8px', borderRadius: 10, fontSize: 10, fontWeight: 500,
+              background: 'none', color: 'var(--text-dim)', border: 'none',
+              textDecoration: 'underline', cursor: 'pointer',
+            }}>clear</button>
+          )}
+        </div>
+      )}
 
       {sortMode === 'tag' && tagGroups ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -1082,11 +1134,13 @@ function EditView({ skit, onSave, onCancel }: { skit: Skit; onSave: (s: Skit) =>
   const [rawText, setRawText] = useState(
     skit.chunks.map(c => c.lines.map(l => l.speaker ? `${l.speaker}: ${l.text}` : l.text).join('\n')).join('\n\n')
   )
+  const [tagInput, setTagInput] = useState((skit.tags || []).join(', '))
   const ok = title.trim() && rawText.trim()
   const handleSave = () => {
     if (!ok) return
-    const updated = parseSkit(rawText, title.trim())
-    updated.id = skit.id // preserve original ID so progress is kept
+    const tags = tagInput.split(',').map(t => t.trim()).filter(Boolean)
+    const updated = parseSkit(rawText, title.trim(), tags.length ? tags : undefined)
+    updated.id = skit.id
     updated.createdAt = skit.createdAt
     onSave(updated)
   }
@@ -1099,6 +1153,27 @@ function EditView({ skit, onSave, onCancel }: { skit: Skit; onSave: (s: Skit) =>
       <div style={{ marginBottom: 14 }}>
         <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4, color: 'var(--text-secondary)' }}>Title</label>
         <input value={title} onChange={e => setTitle(e.target.value)} />
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4, color: 'var(--text-secondary)' }}>
+          Tags <span style={{ fontWeight: 400, color: 'var(--text-dim)' }}>(comma-separated, e.g. poem, classic, school)</span>
+        </label>
+        <input value={tagInput} onChange={e => setTagInput(e.target.value)} placeholder="poem, classic, school" />
+        {tagInput && (
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6 }}>
+            {tagInput.split(',').map(t => t.trim()).filter(Boolean).map((tag, i) => (
+              <span key={i} style={{
+                fontSize: 11, padding: '2px 8px', borderRadius: 10,
+                background: 'var(--pink-faded)', color: 'var(--pink-dark)',
+                border: '1px solid var(--pink)',
+              }}>{tag} <button onClick={() => {
+                const tags = tagInput.split(',').map(t => t.trim()).filter(Boolean)
+                tags.splice(i, 1)
+                setTagInput(tags.join(', '))
+              }} style={{ background: 'none', border: 'none', color: 'var(--pink-dark)', cursor: 'pointer', fontSize: 11, padding: 0, minHeight: 'auto', minWidth: 'auto', marginLeft: 2 }}>×</button></span>
+            ))}
+          </div>
+        )}
       </div>
       <div style={{ marginBottom: 14 }}>
         <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4, color: 'var(--text-secondary)' }}>
