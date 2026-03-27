@@ -1310,9 +1310,14 @@ function TodayGoal({ skitId, onNavigate }: { skitId: string; onNavigate: (tool: 
 
 function NotesPanel({ skitId }: { skitId: string }) {
   const [open, setOpen] = useState(false)
+  const [tab, setTab] = useState<'skit' | 'app'>('skit')
   const [notes, setNotes] = useState(() => loadNotes(skitId))
+  const [appFeedback, setAppFeedback] = useState(() => {
+    try { return localStorage.getItem('skit-trainer-feedback') || '' } catch { return '' }
+  })
   useEffect(() => { setNotes(loadNotes(skitId)) }, [skitId])
   useEffect(() => { saveNotes(skitId, notes) }, [notes, skitId])
+  useEffect(() => { localStorage.setItem('skit-trainer-feedback', appFeedback) }, [appFeedback])
 
   return (
     <div style={{ marginBottom: 14, display: 'inline-block' }}>
@@ -1338,18 +1343,42 @@ function NotesPanel({ skitId }: { skitId: string }) {
               marginTop: 8, padding: 12, borderRadius: 'var(--radius)',
               border: '1px solid var(--border)', background: 'var(--surface)',
             }}>
-              <textarea
-                value={notes}
-                onChange={e => setNotes(e.target.value)}
-                placeholder="Write your notes about this skit here..."
-                style={{
-                  minHeight: 100, fontSize: 13, lineHeight: 1.6,
-                  resize: 'vertical', width: '100%',
-                }}
-              />
-              <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 4, textAlign: 'right' }}>
-                {notes.length} characters
+              {/* Tab selector */}
+              <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+                <button onClick={() => setTab('skit')} style={{
+                  padding: '3px 10px', borderRadius: 10, fontSize: 11, fontWeight: 600,
+                  background: tab === 'skit' ? 'var(--green-faded)' : 'transparent',
+                  color: tab === 'skit' ? 'var(--green-dark)' : 'var(--text-dim)',
+                  border: `1px solid ${tab === 'skit' ? 'var(--green-mid)' : 'transparent'}`,
+                }}>This Skit</button>
+                <button onClick={() => setTab('app')} style={{
+                  padding: '3px 10px', borderRadius: 10, fontSize: 11, fontWeight: 600,
+                  background: tab === 'app' ? 'var(--pink-faded)' : 'transparent',
+                  color: tab === 'app' ? 'var(--pink-dark)' : 'var(--text-dim)',
+                  border: `1px solid ${tab === 'app' ? 'var(--pink)' : 'transparent'}`,
+                }}>App Feedback</button>
               </div>
+              {tab === 'skit' ? (
+                <>
+                  <textarea
+                    value={notes}
+                    onChange={e => setNotes(e.target.value)}
+                    placeholder="Notes about this skit — interpretations, cues, performance ideas..."
+                    style={{ minHeight: 100, fontSize: 13, lineHeight: 1.6, resize: 'vertical', width: '100%' }}
+                  />
+                  <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 4, textAlign: 'right' }}>{notes.length} chars</div>
+                </>
+              ) : (
+                <>
+                  <textarea
+                    value={appFeedback}
+                    onChange={e => setAppFeedback(e.target.value)}
+                    placeholder="Ideas, bugs, suggestions for the app itself..."
+                    style={{ minHeight: 100, fontSize: 13, lineHeight: 1.6, resize: 'vertical', width: '100%' }}
+                  />
+                  <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 4, textAlign: 'right' }}>{appFeedback.length} chars · saved locally</div>
+                </>
+              )}
             </div>
           </motion.div>
         )}
@@ -1835,7 +1864,7 @@ function FillTool({ lines, state, setState }: {
   return (
     <div>
       {/* Controls */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 600 }}>Blanks:</span>
         {[20, 30, 50, 70, 100].map(p => (
           <button key={p} onClick={() => { setState(s => ({ ...s, pct: p })); regenerate() }} style={{
@@ -1845,6 +1874,23 @@ function FillTool({ lines, state, setState }: {
             border: `1px solid ${pct === p ? 'var(--pink)' : 'var(--border)'}`,
           }}>{p}%</button>
         ))}
+        <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>or</span>
+        <input
+          type="number" min={5} max={100} step={5}
+          value={pct}
+          onChange={e => {
+            const v = Math.min(100, Math.max(5, parseInt(e.target.value) || 30))
+            setState(s => ({ ...s, pct: v }))
+          }}
+          onBlur={regenerate}
+          onKeyDown={e => e.key === 'Enter' && regenerate()}
+          style={{
+            width: 52, padding: '3px 4px', fontSize: 11, textAlign: 'center',
+            borderRadius: 14, minHeight: 'auto', minWidth: 'auto',
+            border: '1px solid var(--border)', background: 'var(--surface-alt)',
+          }}
+        />
+        <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>%</span>
       </div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 600 }}>Hints:</span>
@@ -1856,7 +1902,26 @@ function FillTool({ lines, state, setState }: {
             border: `1px solid ${hintType === id ? 'var(--green-mid)' : 'var(--border)'}`,
           }}>{label}</button>
         ))}
-        <button onClick={regenerate} style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--pink)', fontWeight: 600 }}>{'\u21BB'} Reshuffle</button>
+        {!allDone && blankKeys.length > 0 && (
+          <button onClick={() => {
+            const newChecked = { ...checkedBlanks }
+            const newAttempts = { ...attempts }
+            const newAnswers = { ...answers }
+            for (const key of blankKeys) {
+              if (!newChecked[key]) {
+                const tok = tokens.find(t => t.key === key)!
+                const { core } = stripTrailingPunct(tok.word)
+                newChecked[key] = true
+                newAttempts[key] = (newAttempts[key] || 0) + 1
+                if (normalize(core) !== normalize(newAnswers[key] || '')) {
+                  newAnswers[key] = '✗'
+                }
+              }
+            }
+            setState(s => ({ ...s, checkedBlanks: newChecked, attempts: newAttempts, answers: newAnswers, allDone: true }))
+          }} style={{ fontSize: 11, color: 'var(--green-main)', fontWeight: 600 }}>✓ Check All</button>
+        )}
+        <button onClick={regenerate} style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--pink)', fontWeight: 600 }}>↻ Reshuffle</button>
       </div>
       {/* Text with blanks */}
       <div style={{ lineHeight: 2.4 }}>
